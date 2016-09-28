@@ -1,0 +1,6 @@
+[submodule "termo"]
+	path = termo
+	url = git://github.com/pjanouch/termo.git
+[submodule "liberty"]
+	path = liberty
+	url = git://github.com/pjanouch/liberty.git
