@@ -1,12 +1,17 @@
 nncmpp
 ======
 
-'nncmpp' is yet another MPD client.  It does exactly what I want it to, more
-specifically it's a simplified TUI version of Sonata so that I don't need to
-run an ugly undeveloped Python application.
+'nncmpp' is yet another MPD client.  It is in effect a simplified TUI version
+of Sonata.  I had already written a lot of the required code before, so I had
+the perfect opportunity to get rid of the unmaintained Python application and
+make the first TUI client that doesn't feel awkward to use.
 
-If it's not obvious enough, the name a pun on all those ridiculous client names,
-and should be pronounced as "nincompoop".
+Since I only use the filesystem browsing mode, that's also the only thing
+I care to implement.  Anything else will have to be user-contributed while
+I focus on things that aren't worthless to me.
+
+If it's not obvious enough, the name is a pun on all those ridiculous client
+names, and should be pronounced as "nincompoop".
 
 Currently it's under development and doesn't work in any sense yet.
 
@@ -56,7 +61,7 @@ settings = {
 }
 colors = {
 	header = "reverse"
-	header_active = "underline"
+	header_active = "ul"
 	even = "16 231"
 	odd = "16 255"
 }
