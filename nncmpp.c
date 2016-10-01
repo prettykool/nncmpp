@@ -199,7 +199,7 @@ static struct app_context
 	// Connection:
 
 	struct mpd_client client;           ///< MPD client interface
-	struct poller_timer reconnect_event;///< MPD reconnect timer
+	struct poller_timer connect_event;  ///< MPD reconnect timer
 
 	enum player_state state;            ///< Player state
 	struct str_map song_info;           ///< Current song info
@@ -540,6 +540,24 @@ row_buffer_append (struct row_buffer *self, const char *str, chtype attrs)
 	}
 }
 
+static void
+row_buffer_addv (struct row_buffer *self, const char *s, ...)
+	ATTRIBUTE_SENTINEL;
+
+static void
+row_buffer_addv (struct row_buffer *self, const char *s, ...)
+{
+	va_list ap;
+	va_start (ap, s);
+
+	while (s)
+	{
+		row_buffer_append (self, s, va_arg (ap, chtype));
+		s = va_arg (ap, const char *);
+	}
+	va_end (ap);
+}
+
 /// Pop as many codepoints as needed to free up "space" character cells.
 /// Given the suffix nature of combining marks, this should work pretty fine.
 static int
@@ -655,7 +673,7 @@ help_tab_create ()
 	return super;
 }
 
-// --- Application -------------------------------------------------------------
+// --- Rendering ---------------------------------------------------------------
 
 /// Write the given UTF-8 string padded with spaces.
 /// @param[in] n  The number of characters to write, or -1 for the whole string.
@@ -692,8 +710,66 @@ app_next_row (chtype attrs)
 	mvwhline (stdscr, g_ctx.list_offset++, 0, ' ' | attrs, COLS);
 }
 
-static size_t
-app_write_time (int seconds, chtype attrs)
+// We typically write here to a single buffer serving the entire line
+static void
+app_flush_buffer (struct row_buffer *buf, chtype attrs)
+{
+	if (buf->total_width > COLS)
+		row_buffer_ellipsis (buf, COLS, attrs);
+
+	app_next_row (attrs);
+	row_buffer_flush (buf);
+	row_buffer_free (buf);
+}
+
+static void
+app_redraw_song_info (void)
+{
+	// The map doesn't need to be initialized at all, so we need to check
+	struct str_map *map = &g_ctx.song_info;
+	if (!soft_assert (map->len != 0))
+		return;
+
+	// XXX: can we get rid of this and still make it look acceptable?
+	chtype a_normal    = APP_ATTR (HEADER);
+	chtype a_highlight = APP_ATTR (HIGHLIGHT);
+
+	char *title;
+	if ((title = str_map_find (map, "title"))
+	 || (title = str_map_find (map, "name"))
+	 || (title = str_map_find (map, "file")))
+	{
+		struct row_buffer buf;
+		row_buffer_init (&buf);
+		row_buffer_append (&buf, title, a_highlight);
+		app_flush_buffer (&buf, a_highlight);
+	}
+
+	char *artist = str_map_find (map, "artist");
+	char *album  = str_map_find (map, "album");
+	if (!artist && !album)
+		return;
+
+	struct row_buffer buf;
+	row_buffer_init (&buf);
+
+	if (artist)
+	{
+		if (buf.total_width)
+			row_buffer_append (&buf, " ", a_normal);
+		row_buffer_addv (&buf, "by ", a_normal, artist, a_highlight, NULL);
+	}
+	if (album)
+	{
+		if (buf.total_width)
+			row_buffer_append (&buf, " ", a_normal);
+		row_buffer_addv (&buf, "from ", a_normal, album, a_highlight, NULL);
+	}
+	app_flush_buffer (&buf, a_normal);
+}
+
+static void
+app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
 {
 	int minutes = seconds / 60; seconds %= 60;
 	int hours   = minutes / 60; hours   %= 60;
@@ -702,134 +778,87 @@ app_write_time (int seconds, chtype attrs)
 	str_init (&s);
 
 	if (hours)
-	{
-		str_append_printf (&s, "%d:", hours);
-		str_append_printf (&s, "%02d:", minutes);
-	}
+		str_append_printf (&s, "%d:%02d:", hours, minutes);
 	else
 		str_append_printf (&s, "%d:", minutes);
 
 	str_append_printf (&s, "%02d", seconds);
-	size_t result = app_write_utf8 (s.str, attrs, -1);
+	row_buffer_append (buf, s.str, attrs);
 	str_free (&s);
-	return result;
 }
 
 static void
 app_redraw_status (void)
 {
-	chtype normal    = APP_ATTR (HEADER);
-	chtype highlight = APP_ATTR (HIGHLIGHT);
+	if (g_ctx.state != PLAYER_STOPPED)
+		app_redraw_song_info ();
 
-	if (g_ctx.state == PLAYER_STOPPED)
-		goto line;
+	// XXX: can we get rid of this and still make it look acceptable?
+	chtype a_normal    = APP_ATTR (HEADER);
+	chtype a_highlight = APP_ATTR (HIGHLIGHT);
 
-	// The map doesn't need to be initialized at all, so we need to check
-	struct str_map *map = &g_ctx.song_info;
-	if (!soft_assert (map->len != 0))
-		return;
-
-	char *title;
-	if ((title = str_map_find (map, "title"))
-	 || (title = str_map_find (map, "name"))
-	 || (title = str_map_find (map, "file")))
-	{
-		app_next_row (normal);
-
-		struct row_buffer buf;
-		row_buffer_init (&buf);
-		row_buffer_append (&buf, title, highlight);
-		if (buf.total_width > COLS)
-			row_buffer_ellipsis (&buf, COLS, highlight);
-		row_buffer_flush (&buf);
-		row_buffer_free (&buf);
-	}
-
-	char *artist = str_map_find (map, "artist");
-	char *album  = str_map_find (map, "album");
-	if (artist || album)
-	{
-		app_next_row (normal);
-
-		struct row_buffer buf;
-		row_buffer_init (&buf);
-
-		bool first = true;
-		if (artist)
-		{
-			if (!first) row_buffer_append (&buf, " ", normal);
-			row_buffer_append (&buf, "by ", normal);
-			row_buffer_append (&buf, artist, highlight);
-			first = false;
-		}
-		if (album)
-		{
-			if (!first) row_buffer_append (&buf, " ", normal);
-			row_buffer_append (&buf, "from ", normal);
-			row_buffer_append (&buf, album, highlight);
-			first = false;
-		}
-
-		if (buf.total_width > COLS)
-			row_buffer_ellipsis (&buf, COLS, normal);
-		row_buffer_flush (&buf);
-		row_buffer_free (&buf);
-	}
-
-line:
-	app_next_row (normal);
+	struct row_buffer buf;
+	row_buffer_init (&buf);
 
 	bool stopped = g_ctx.state == PLAYER_STOPPED;
-	chtype active = stopped ? normal : highlight;
 
-	// TODO: we desperately need some better abstractions for this;
-	//   at minimum we need to count characters already written
-	app_write_utf8 ("<<", active, -1);
-	addch (' ' | normal);
-
+	chtype a_song_action = stopped ? a_normal : a_highlight;
+	row_buffer_addv (&buf, "<<", a_song_action, " ", a_normal, NULL);
 	if (g_ctx.state == PLAYER_PLAYING)
-		app_write_utf8 ("||", highlight, -1);
+		row_buffer_addv (&buf, "||", a_highlight, " ", a_normal, NULL);
 	else
-		app_write_utf8 ("|>", highlight, -1);
-	addch (' ' | normal);
-
-	app_write_utf8 ("[]", active, -1);
-	addch (' ' | normal);
-	app_write_utf8 (">>", active, -1);
-	addch (' ' | normal);
-	addch (' ' | normal);
+		row_buffer_addv (&buf, "|>", a_highlight, " ", a_normal, NULL);
+	row_buffer_addv (&buf, "[]", a_song_action, " ", a_normal, NULL);
+	row_buffer_addv (&buf, ">>", a_song_action, "  ", a_normal, NULL);
 
 	if (stopped)
-		app_write_utf8 ("Stopped", normal, COLS);
+		row_buffer_append (&buf, "Stopped", a_normal);
 	else
 	{
-		// TODO: convert the display to minutes
 		if (g_ctx.song_elapsed >= 0)
 		{
-			app_write_time (g_ctx.song_elapsed, normal);
-			addch (' ' | normal);
+			app_write_time (&buf, g_ctx.song_elapsed, a_normal);
+			row_buffer_append (&buf, " ", a_normal);
 		}
-		if (g_ctx.song_duration >= 0)
+		if (g_ctx.song_duration >= 1)
 		{
-			addch ('/' | normal);
-			addch (' ' | normal);
-			app_write_time (g_ctx.song_duration, normal);
-			addch (' ' | normal);
+			row_buffer_append (&buf, "/ ", a_normal);
+			app_write_time (&buf, g_ctx.song_duration, a_normal);
+			row_buffer_append (&buf, " ", a_normal);
 		}
-		addch (' ' | normal);
-
-		if (g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 0)
-		{
-			// TODO: display a gauge representing the same information,
-			//   attributes BAR_ELAPSED and BAR_REMAINS
-		}
-		else
-		{
-			// TODO: just fill the space
-		}
+		row_buffer_append (&buf, " ", a_normal);
 	}
 
-	// TODO: append the volume value if available
+	// It gets a bit complicated due to the only right-aligned item on the row
+	char *volume = NULL;
+	int remaining = COLS - buf.total_width;
+	if (g_ctx.volume >= 0)
+	{
+		volume = xstrdup_printf ("  %3d%%", g_ctx.volume);
+		remaining -= strlen (volume);
+	}
+
+	// TODO: store the coordinates of the progress bar
+	if (!stopped && g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 1
+	 && remaining > 0)
+	{
+		int len_elapsed = (int) ((float) g_ctx.song_elapsed
+			/ g_ctx.song_duration * remaining + 0.5);
+		int len_remains = remaining - len_elapsed;
+		while (len_elapsed-- > 0)
+			row_buffer_append (&buf, " ", APP_ATTR (ELAPSED));
+		while (len_remains-- > 0)
+			row_buffer_append (&buf, " ", APP_ATTR (REMAINS));
+	}
+	else while (remaining-- > 0)
+		row_buffer_append (&buf, " ", a_normal);
+
+	if (volume)
+	{
+		row_buffer_append (&buf, volume, a_normal);
+		free (volume);
+	}
+	app_flush_buffer (&buf, a_normal);
 }
 
 static void
@@ -915,7 +944,7 @@ app_redraw (void)
 	app_redraw_view ();
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// --- Actions -----------------------------------------------------------------
 
 /// Scroll up @a n items.  Doesn't redraw.
 static bool
@@ -1427,7 +1456,7 @@ mpd_on_events (unsigned subsystems, void *user_data)
 static void
 mpd_queue_reconnect (void)
 {
-	poller_timer_set (&g_ctx.reconnect_event, 5 * 1000);
+	poller_timer_set (&g_ctx.connect_event, 5 * 1000);
 }
 
 static void
@@ -1624,9 +1653,9 @@ app_init_poller_events (void)
 	poller_timer_init (&g_ctx.tk_timer, &g_ctx.poller);
 	g_ctx.tk_timer.dispatcher = app_on_key_timer;
 
-	poller_timer_init (&g_ctx.reconnect_event, &g_ctx.poller);
-	g_ctx.reconnect_event.dispatcher = app_on_reconnect;
-	poller_timer_set (&g_ctx.reconnect_event, 0);
+	poller_timer_init (&g_ctx.connect_event, &g_ctx.poller);
+	g_ctx.connect_event.dispatcher = app_on_reconnect;
+	poller_timer_set (&g_ctx.connect_event, 0);
 
 	poller_timer_init (&g_ctx.elapsed_event, &g_ctx.poller);
 	g_ctx.elapsed_event.dispatcher = mpd_on_tick;

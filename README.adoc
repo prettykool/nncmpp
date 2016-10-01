@@ -13,7 +13,7 @@ I focus on things that aren't worthless to me.
 If it's not obvious enough, the name is a pun on all those ridiculous client
 names, and should be pronounced as "nincompoop".
 
-Currently it's under development and doesn't work in any sense yet.
+Currently it's under development and doesn't do much.
 
 Packages
 --------
