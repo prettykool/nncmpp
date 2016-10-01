@@ -70,7 +70,7 @@
 
 #define CTRL_KEY(x)  ((x) - 'A' + 1)
 
-#define APP_TITLE  PROGRAM_NAME " "     ///< Left top corner
+#define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
 // --- Utilities ---------------------------------------------------------------
 
@@ -101,17 +101,19 @@ update_curses_terminal_size (void)
 // global namespace and makes it harder to distinguish what functions relate to.
 
 // Avoiding colours in the defaults here in order to support dumb terminals
-// TODO: we also want a different "highlighted" attribute for the top part
-//   -> then we have to do attrset(0)
-// TODO: add two attributes for the gauge
-//   -> we should also make it possible to set characters for both parts
-// TODO: create another attribute for selected items
-#define ATTRIBUTE_TABLE(XX)                            \
-	XX( TOP,    "top",           -1, -1, 0           ) \
-	XX( HEADER, "header",        -1, -1, A_REVERSE   ) \
-	XX( ACTIVE, "header_active", -1, -1, A_UNDERLINE ) \
-	XX( EVEN,   "even",          -1, -1, 0           ) \
-	XX( ODD,    "odd",           -1, -1, 0           )
+#define ATTRIBUTE_TABLE(XX)                             \
+	XX( HEADER,     "header",     -1, -1, 0           ) \
+	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD      ) \
+	\
+	XX( ELAPSED,    "elapsed",    -1, -1, A_REVERSE   ) \
+	XX( REMAINS,    "remains",    -1, -1, A_UNDERLINE ) \
+	\
+	XX( TAB_BAR,    "tab_bar",    -1, -1, A_REVERSE   ) \
+	XX( TAB_ACTIVE, "tab_active", -1, -1, A_UNDERLINE ) \
+	\
+	XX( EVEN,       "even",       -1, -1, 0           ) \
+	XX( ODD,        "odd",        -1, -1, 0           ) \
+	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   )
 
 enum
 {
@@ -202,11 +204,11 @@ static struct app_context
 	enum player_state state;            ///< Player state
 	struct str_map song_info;           ///< Current song info
 
-	// FIXME: this is doomed to drift unless we use POSIX CLOCK_MONOTONIC
 	struct poller_timer elapsed_event;  ///< Seconds elapsed event
 	// TODO: initialize these to -1
 	int song_elapsed;                   ///< Song elapsed in seconds
 	int song_duration;                  ///< Song duration in seconds
+	int volume;                         ///< Current volume
 
 	// Data:
 
@@ -690,9 +692,35 @@ app_next_row (chtype attrs)
 	mvwhline (stdscr, g_ctx.list_offset++, 0, ' ' | attrs, COLS);
 }
 
+static size_t
+app_write_time (int seconds, chtype attrs)
+{
+	int minutes = seconds / 60; seconds %= 60;
+	int hours   = minutes / 60; hours   %= 60;
+
+	struct str s;
+	str_init (&s);
+
+	if (hours)
+	{
+		str_append_printf (&s, "%d:", hours);
+		str_append_printf (&s, "%02d:", minutes);
+	}
+	else
+		str_append_printf (&s, "%d:", minutes);
+
+	str_append_printf (&s, "%02d", seconds);
+	size_t result = app_write_utf8 (s.str, attrs, -1);
+	str_free (&s);
+	return result;
+}
+
 static void
 app_redraw_status (void)
 {
+	chtype normal    = APP_ATTR (HEADER);
+	chtype highlight = APP_ATTR (HIGHLIGHT);
+
 	if (g_ctx.state == PLAYER_STOPPED)
 		goto line;
 
@@ -706,15 +734,22 @@ app_redraw_status (void)
 	 || (title = str_map_find (map, "name"))
 	 || (title = str_map_find (map, "file")))
 	{
-		app_next_row (0);
-		app_write_utf8 (title, A_BOLD, COLS);
+		app_next_row (normal);
+
+		struct row_buffer buf;
+		row_buffer_init (&buf);
+		row_buffer_append (&buf, title, highlight);
+		if (buf.total_width > COLS)
+			row_buffer_ellipsis (&buf, COLS, highlight);
+		row_buffer_flush (&buf);
+		row_buffer_free (&buf);
 	}
 
 	char *artist = str_map_find (map, "artist");
 	char *album  = str_map_find (map, "album");
 	if (artist || album)
 	{
-		app_next_row (0);
+		app_next_row (normal);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
@@ -722,45 +757,76 @@ app_redraw_status (void)
 		bool first = true;
 		if (artist)
 		{
-			if (!first) row_buffer_append (&buf, " ", 0);
-			row_buffer_append (&buf, "by ", 0);
-			row_buffer_append (&buf, artist, A_BOLD);
+			if (!first) row_buffer_append (&buf, " ", normal);
+			row_buffer_append (&buf, "by ", normal);
+			row_buffer_append (&buf, artist, highlight);
 			first = false;
 		}
 		if (album)
 		{
-			if (!first) row_buffer_append (&buf, " ", 0);
-			row_buffer_append (&buf, "from ", 0);
-			row_buffer_append (&buf, album, A_BOLD);
+			if (!first) row_buffer_append (&buf, " ", normal);
+			row_buffer_append (&buf, "from ", normal);
+			row_buffer_append (&buf, album, highlight);
 			first = false;
 		}
 
 		if (buf.total_width > COLS)
-			row_buffer_ellipsis (&buf, COLS, 0);
+			row_buffer_ellipsis (&buf, COLS, normal);
 		row_buffer_flush (&buf);
 		row_buffer_free (&buf);
 	}
 
 line:
-	app_next_row (0);
+	app_next_row (normal);
 
 	bool stopped = g_ctx.state == PLAYER_STOPPED;
-	app_write_utf8 ("<< ", stopped ? 0 : A_BOLD, -1);
+	chtype active = stopped ? normal : highlight;
+
+	// TODO: we desperately need some better abstractions for this;
+	//   at minimum we need to count characters already written
+	app_write_utf8 ("<<", active, -1);
+	addch (' ' | normal);
 
 	if (g_ctx.state == PLAYER_PLAYING)
-		app_write_utf8 ("|| ", A_BOLD, -1);
+		app_write_utf8 ("||", highlight, -1);
 	else
-		app_write_utf8 ("|> ", A_BOLD, -1);
+		app_write_utf8 ("|>", highlight, -1);
+	addch (' ' | normal);
 
-	app_write_utf8 ("[] ", stopped ? 0 : A_BOLD, -1);
-	app_write_utf8 (">> ", stopped ? 0 : A_BOLD, -1);
+	app_write_utf8 ("[]", active, -1);
+	addch (' ' | normal);
+	app_write_utf8 (">>", active, -1);
+	addch (' ' | normal);
+	addch (' ' | normal);
 
 	if (stopped)
-		app_write_utf8 ("Stopped", 0, COLS);
+		app_write_utf8 ("Stopped", normal, COLS);
 	else
 	{
-		// TODO: convert and display "song_elapsed / song_duration"
-		// TODO: display a gauge representing the same information
+		// TODO: convert the display to minutes
+		if (g_ctx.song_elapsed >= 0)
+		{
+			app_write_time (g_ctx.song_elapsed, normal);
+			addch (' ' | normal);
+		}
+		if (g_ctx.song_duration >= 0)
+		{
+			addch ('/' | normal);
+			addch (' ' | normal);
+			app_write_time (g_ctx.song_duration, normal);
+			addch (' ' | normal);
+		}
+		addch (' ' | normal);
+
+		if (g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 0)
+		{
+			// TODO: display a gauge representing the same information,
+			//   attributes BAR_ELAPSED and BAR_REMAINS
+		}
+		else
+		{
+			// TODO: just fill the space
+		}
 	}
 
 	// TODO: append the volume value if available
@@ -772,32 +838,35 @@ app_redraw_top (void)
 	// TODO: when it changes from the previous value, fix the selection
 	g_ctx.list_offset = 0;
 
-	attrset (APP_ATTR (TOP));
+	attrset (0);
 	switch (g_ctx.client.state)
 	{
 	case MPD_CONNECTED:
 		app_redraw_status ();
 		break;
 	case MPD_CONNECTING:
-		app_next_row (0);
-		app_write_utf8 ("Connecting to MPD...", 0, COLS);
+		app_next_row (APP_ATTR (HEADER));
+		app_write_utf8 ("Connecting to MPD...", APP_ATTR (HEADER), COLS);
 		break;
 	case MPD_DISCONNECTED:
-		app_next_row (0);
-		app_write_utf8 ("Disconnected", 0, COLS);
+		app_next_row (APP_ATTR (HEADER));
+		app_write_utf8 ("Disconnected", APP_ATTR (HEADER), COLS);
 	}
 
-	attrset (APP_ATTR (HEADER));
+	attrset (APP_ATTR (TAB_BAR));
 	app_next_row (0);
-	// TODO: render this with APP_ATTR (ACTIVE) when the help tab is selected;
+	// TODO: render this with APP_ATTR (TAB_ACTIVE) when the help tab is selected;
 	//   ...maybe the help tab should not even be on the list?
-	size_t indent = app_write_utf8 (APP_TITLE, A_BOLD, -1);
+	size_t indent = app_write_utf8 (APP_TITLE, 0, -1);
+
+	addch (' ');
+	indent++;
 
 	attrset (0);
 	LIST_FOR_EACH (struct tab, it, g_ctx.tabs)
 	{
 		indent += app_write_utf8 (it->name,
-			it == g_ctx.active_tab ? APP_ATTR (ACTIVE) : APP_ATTR (HEADER),
+			it == g_ctx.active_tab ? APP_ATTR (TAB_ACTIVE) : APP_ATTR (TAB_BAR),
 			MIN (COLS - indent, it->name_width));
 	}
 	refresh ();
@@ -815,10 +884,10 @@ app_redraw_view (void)
 		(int) tab->item_count - tab->item_top);
 	for (int row_index = 0; row_index < to_show; row_index++)
 	{
-		unsigned item_index = tab->item_top + row_index;
+		int item_index = tab->item_top + row_index;
 		int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
-		if ((int) item_index == tab->item_selected)
-			row_attrs |= A_REVERSE;
+		if (item_index == tab->item_selected)
+			row_attrs = APP_ATTR (SELECTION);
 
 		attrset (row_attrs);
 
@@ -1246,11 +1315,18 @@ mpd_on_info_response (const struct mpd_response *response,
 	const struct str_vector *data, void *user_data)
 {
 	(void) user_data;
+
+	// TODO: do this also on disconnect
+	g_ctx.song_elapsed = -1;
+	g_ctx.song_duration = -1;
+	g_ctx.volume = -1;
+	str_map_free (&g_ctx.song_info);
+	poller_timer_reset (&g_ctx.elapsed_event);
+
 	if (!response->success)
 	{
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
-		// TODO: invalidate any song-related data
 		return;
 	}
 
@@ -1269,24 +1345,54 @@ mpd_on_info_response (const struct mpd_response *response,
 
 	// Note that we may receive a "time" field twice, however the right one
 	// wins here due to the order we send the commands in
-	char *time = str_map_find (&map, "time");
+	char *time     = str_map_find (&map, "time");
+	char *duration = str_map_find (&map, "duration");
 	if (time)
 	{
 		char *colon = strchr (time, ':');
-		// TODO: split "time" at ':' -> elapsed seconds, total seconds;
-		//   if there's no colon, use "duration"
+		if (colon)
+		{
+			*colon = '\0';
+			duration = colon + 1;
+		}
 	}
 
-	// TODO: if we're playing, parse the "elapsed" value and use it
-	//   to set a timer for status updates (cancel the timer at the start
-	//   of the info callback and upon disconnect)
+	unsigned long tmp;
+	if (time     && xstrtoul (&tmp, time,     10))
+		g_ctx.song_elapsed  = tmp;
+	if (duration && xstrtoul (&tmp, duration, 10))
+		g_ctx.song_duration = tmp;
 
-	// TODO: "volume" is a string, parse it nonetheless so that we can later
-	//   tell MPD to change it
+	// TODO: use "time" as a fallback (no milliseconds there)
+	char *elapsed = str_map_find (&map, "elapsed");
+	if (elapsed && g_ctx.state == PLAYER_PLAYING)
+	{
+		// TODO: parse the "elapsed" value and use it
+		char *period = strchr (elapsed, '.');
+		if (period && xstrtoul (&tmp, period + 1, 10))
+		{
+			// TODO: initialize the timer and create a callback
+			poller_timer_set (&g_ctx.elapsed_event, 1000 - tmp);
+		}
+	}
 
-	str_map_free (&g_ctx.song_info);
+	char *volume = str_map_find (&map, "volume");
+	if (volume && xstrtoul (&tmp, volume, 10))
+		g_ctx.volume = tmp;
+
 	g_ctx.song_info = map;
+	app_redraw ();
+}
 
+static void
+mpd_on_tick (void *user_data)
+{
+	(void) user_data;
+	// FIXME: this is doomed to drift unless we use POSIX CLOCK_MONOTONIC
+	poller_timer_set (&g_ctx.elapsed_event, 1000);
+
+	g_ctx.song_elapsed++;
+	// TODO: try to be more efficient in the redrawing procedures
 	app_redraw ();
 }
 
@@ -1521,6 +1627,9 @@ app_init_poller_events (void)
 	poller_timer_init (&g_ctx.reconnect_event, &g_ctx.poller);
 	g_ctx.reconnect_event.dispatcher = app_on_reconnect;
 	poller_timer_set (&g_ctx.reconnect_event, 0);
+
+	poller_timer_init (&g_ctx.elapsed_event, &g_ctx.poller);
+	g_ctx.elapsed_event.dispatcher = mpd_on_tick;
 }
 
 int
