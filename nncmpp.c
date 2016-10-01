@@ -101,7 +101,13 @@ update_curses_terminal_size (void)
 // global namespace and makes it harder to distinguish what functions relate to.
 
 // Avoiding colours in the defaults here in order to support dumb terminals
+// TODO: we also want a different "highlighted" attribute for the top part
+//   -> then we have to do attrset(0)
+// TODO: add two attributes for the gauge
+//   -> we should also make it possible to set characters for both parts
+// TODO: create another attribute for selected items
 #define ATTRIBUTE_TABLE(XX)                            \
+	XX( TOP,    "top",           -1, -1, 0           ) \
 	XX( HEADER, "header",        -1, -1, A_REVERSE   ) \
 	XX( ACTIVE, "header_active", -1, -1, A_UNDERLINE ) \
 	XX( EVEN,   "even",          -1, -1, 0           ) \
@@ -194,8 +200,13 @@ static struct app_context
 	struct poller_timer reconnect_event;///< MPD reconnect timer
 
 	enum player_state state;            ///< Player state
-	// TODO: probably save the full info reply
-	char *song;                         ///< Currently playing song
+	struct str_map song_info;           ///< Current song info
+
+	// FIXME: this is doomed to drift unless we use POSIX CLOCK_MONOTONIC
+	struct poller_timer elapsed_event;  ///< Seconds elapsed event
+	// TODO: initialize these to -1
+	int song_elapsed;                   ///< Song elapsed in seconds
+	int song_duration;                  ///< Song duration in seconds
 
 	// Data:
 
@@ -432,7 +443,7 @@ static void
 app_free_context (void)
 {
 	mpd_client_free (&g_ctx.client);
-	free (g_ctx.song);
+	str_map_free (&g_ctx.song_info);
 
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
@@ -672,36 +683,112 @@ app_write_utf8 (const char *str, chtype attrs, int n)
 	return n;
 }
 
+/// Clear a row in the header to be used and increment the listview offset
+static void
+app_next_row (chtype attrs)
+{
+	mvwhline (stdscr, g_ctx.list_offset++, 0, ' ' | attrs, COLS);
+}
+
+static void
+app_redraw_status (void)
+{
+	if (g_ctx.state == PLAYER_STOPPED)
+		goto line;
+
+	// The map doesn't need to be initialized at all, so we need to check
+	struct str_map *map = &g_ctx.song_info;
+	if (!soft_assert (map->len != 0))
+		return;
+
+	char *title;
+	if ((title = str_map_find (map, "title"))
+	 || (title = str_map_find (map, "name"))
+	 || (title = str_map_find (map, "file")))
+	{
+		app_next_row (0);
+		app_write_utf8 (title, A_BOLD, COLS);
+	}
+
+	char *artist = str_map_find (map, "artist");
+	char *album  = str_map_find (map, "album");
+	if (artist || album)
+	{
+		app_next_row (0);
+
+		struct row_buffer buf;
+		row_buffer_init (&buf);
+
+		bool first = true;
+		if (artist)
+		{
+			if (!first) row_buffer_append (&buf, " ", 0);
+			row_buffer_append (&buf, "by ", 0);
+			row_buffer_append (&buf, artist, A_BOLD);
+			first = false;
+		}
+		if (album)
+		{
+			if (!first) row_buffer_append (&buf, " ", 0);
+			row_buffer_append (&buf, "from ", 0);
+			row_buffer_append (&buf, album, A_BOLD);
+			first = false;
+		}
+
+		if (buf.total_width > COLS)
+			row_buffer_ellipsis (&buf, COLS, 0);
+		row_buffer_flush (&buf);
+		row_buffer_free (&buf);
+	}
+
+line:
+	app_next_row (0);
+
+	bool stopped = g_ctx.state == PLAYER_STOPPED;
+	app_write_utf8 ("<< ", stopped ? 0 : A_BOLD, -1);
+
+	if (g_ctx.state == PLAYER_PLAYING)
+		app_write_utf8 ("|| ", A_BOLD, -1);
+	else
+		app_write_utf8 ("|> ", A_BOLD, -1);
+
+	app_write_utf8 ("[] ", stopped ? 0 : A_BOLD, -1);
+	app_write_utf8 (">> ", stopped ? 0 : A_BOLD, -1);
+
+	if (stopped)
+		app_write_utf8 ("Stopped", 0, COLS);
+	else
+	{
+		// TODO: convert and display "song_elapsed / song_duration"
+		// TODO: display a gauge representing the same information
+	}
+
+	// TODO: append the volume value if available
+}
+
 static void
 app_redraw_top (void)
 {
-	// TODO: this will eventually be dynamically computed depending on contents
-	g_ctx.list_offset = 2;
+	// TODO: when it changes from the previous value, fix the selection
+	g_ctx.list_offset = 0;
 
-	attrset (0);
-	mvwhline (stdscr, 0, 0, 0, COLS);
+	attrset (APP_ATTR (TOP));
 	switch (g_ctx.client.state)
 	{
 	case MPD_CONNECTED:
-		switch (g_ctx.state)
-		{
-		case PLAYER_PLAYING:
-		case PLAYER_PAUSED:
-			app_write_utf8 (g_ctx.song, 0, COLS);
-			break;
-		case PLAYER_STOPPED:
-			app_write_utf8 ("Stopped", 0, COLS);
-		}
+		app_redraw_status ();
 		break;
 	case MPD_CONNECTING:
+		app_next_row (0);
 		app_write_utf8 ("Connecting to MPD...", 0, COLS);
 		break;
 	case MPD_DISCONNECTED:
+		app_next_row (0);
 		app_write_utf8 ("Disconnected", 0, COLS);
 	}
 
 	attrset (APP_ATTR (HEADER));
-	mvwhline (stdscr, 1, 0, APP_ATTR (HEADER), COLS);
+	app_next_row (0);
 	// TODO: render this with APP_ATTR (ACTIVE) when the help tab is selected;
 	//   ...maybe the help tab should not even be on the list?
 	size_t indent = app_write_utf8 (APP_TITLE, A_BOLD, -1);
@@ -1163,6 +1250,7 @@ mpd_on_info_response (const struct mpd_response *response,
 	{
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
+		// TODO: invalidate any song-related data
 		return;
 	}
 
@@ -1179,24 +1267,26 @@ mpd_on_info_response (const struct mpd_response *response,
 			g_ctx.state = PLAYER_PAUSED;
 	}
 
-	struct str s;
-	str_init (&s);
+	// Note that we may receive a "time" field twice, however the right one
+	// wins here due to the order we send the commands in
+	char *time = str_map_find (&map, "time");
+	if (time)
+	{
+		char *colon = strchr (time, ':');
+		// TODO: split "time" at ':' -> elapsed seconds, total seconds;
+		//   if there's no colon, use "duration"
+	}
 
-	char *mpd_song = NULL;
-	if ((value = str_map_find (&map, "title"))
-	 || (value = str_map_find (&map, "name"))
-	 || (value = str_map_find (&map, "file")))
-		str_append_printf (&s, "\"%s\"", value);
-	if ((value = str_map_find (&map, "artist")))
-		str_append_printf (&s, " by \"%s\"", value);
-	if ((value = str_map_find (&map, "album")))
-		str_append_printf (&s, " from \"%s\"", value);
-	mpd_song = str_steal (&s);
+	// TODO: if we're playing, parse the "elapsed" value and use it
+	//   to set a timer for status updates (cancel the timer at the start
+	//   of the info callback and upon disconnect)
 
-	str_map_free (&map);
+	// TODO: "volume" is a string, parse it nonetheless so that we can later
+	//   tell MPD to change it
 
-	free (g_ctx.song);
-	g_ctx.song = mpd_song;
+	str_map_free (&g_ctx.song_info);
+	g_ctx.song_info = map;
+
 	app_redraw ();
 }
 
