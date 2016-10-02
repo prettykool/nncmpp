@@ -217,13 +217,19 @@ static struct app_context
 	struct tab *tabs;                   ///< All tabs
 	struct tab *active_tab;             ///< Active tab
 
+	// Emulated widgets:
+
+	int top_height;                     ///< Height of the top part
+
+	int controls_offset;                ///< Offset to player controls or -1
+	int gauge_offset;                   ///< Offset to the gauge or -1
+	int gauge_width;                    ///< Width of the gauge, if present
+
 	// Terminal:
 
 	termo_t *tk;                        ///< termo handle
 	struct poller_timer tk_timer;       ///< termo timeout timer
 	bool locale_is_utf8;                ///< The locale is Unicode
-
-	int list_offset;                    ///< Height of the top part
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
@@ -707,7 +713,7 @@ app_write_utf8 (const char *str, chtype attrs, int n)
 static void
 app_next_row (chtype attrs)
 {
-	mvwhline (stdscr, g_ctx.list_offset++, 0, ' ' | attrs, COLS);
+	mvwhline (stdscr, g_ctx.top_height++, 0, ' ' | attrs, COLS);
 }
 
 // We typically write here to a single buffer serving the entire line
@@ -790,6 +796,9 @@ app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
 static void
 app_write_gauge (struct row_buffer *buf, float ratio, int width)
 {
+	if (ratio < 0) ratio = 0;
+	if (ratio > 1) ratio = 1;
+
 	// Always compute it in exactly eight times the resolution,
 	// because sometimes Unicode is even useful
 	int len_left = ratio * width * 8 + 0.5;
@@ -871,6 +880,8 @@ app_redraw_status (void)
 	if (!stopped && g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 1
 	 && remaining > 0)
 	{
+		g_ctx.gauge_offset = buf.total_width;
+		g_ctx.gauge_width = remaining;
 		app_write_gauge (&buf,
 			(float) g_ctx.song_elapsed / g_ctx.song_duration, remaining);
 	}
@@ -882,6 +893,7 @@ app_redraw_status (void)
 		row_buffer_append (&buf, volume, a_normal);
 		free (volume);
 	}
+	g_ctx.controls_offset = g_ctx.top_height;
 	app_flush_buffer (&buf, a_normal);
 }
 
@@ -889,7 +901,11 @@ static void
 app_redraw_top (void)
 {
 	// TODO: when it changes from the previous value, fix the selection
-	g_ctx.list_offset = 0;
+	g_ctx.top_height = 0;
+
+	g_ctx.controls_offset = -1;
+	g_ctx.gauge_offset = -1;
+	g_ctx.gauge_width = 0;
 
 	attrset (0);
 	switch (g_ctx.client.state)
@@ -928,12 +944,12 @@ app_redraw_top (void)
 static void
 app_redraw_view (void)
 {
-	move (g_ctx.list_offset, 0);
+	move (g_ctx.top_height, 0);
 	clrtobot ();
 
 	// TODO: display a scrollbar on the right side
 	struct tab *tab = g_ctx.active_tab;
-	int to_show = MIN (LINES - g_ctx.list_offset,
+	int to_show = MIN (LINES - g_ctx.top_height,
 		(int) tab->item_count - tab->item_top);
 	for (int row_index = 0; row_index < to_show; row_index++)
 	{
@@ -1024,7 +1040,7 @@ app_one_item_down (void)
 	if (tab->item_selected + 1 >= (int) tab->item_count)
 		return false;
 
-	int n_visible = LINES - g_ctx.list_offset;
+	int n_visible = LINES - g_ctx.top_height;
 	if (++tab->item_selected >= tab->item_top + n_visible)
 		app_scroll_down (1);
 
@@ -1049,7 +1065,7 @@ app_process_resize (void)
 	if (tab->item_selected < 0)
 		return;
 
-	int n_visible = LINES - g_ctx.list_offset;
+	int n_visible = LINES - g_ctx.top_height;
 	if (n_visible < 0)
 		return;
 
@@ -1070,6 +1086,11 @@ enum user_action
 	USER_ACTION_QUIT,
 	USER_ACTION_REDRAW,
 
+	USER_ACTION_MPD_PREVIOUS,
+	USER_ACTION_MPD_TOGGLE,
+	USER_ACTION_MPD_STOP,
+	USER_ACTION_MPD_NEXT,
+
 	USER_ACTION_GOTO_ITEM_PREVIOUS,
 	USER_ACTION_GOTO_ITEM_NEXT,
 	USER_ACTION_GOTO_PAGE_PREVIOUS,
@@ -1080,9 +1101,19 @@ enum user_action
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+#define MPD_SIMPLE(...)                             \
+{                                                   \
+	if (c->state != MPD_CONNECTED)                  \
+		break;                                      \
+	mpd_client_send_command (c, __VA_ARGS__, NULL); \
+	mpd_client_add_task (c, NULL, NULL);            \
+	mpd_client_idle (c, 0);                         \
+}
+
 static bool
 app_process_user_action (enum user_action action)
 {
+	struct mpd_client *c = &g_ctx.client;
 	switch (action)
 	{
 	case USER_ACTION_QUIT:
@@ -1094,6 +1125,29 @@ app_process_user_action (enum user_action action)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+	case USER_ACTION_MPD_PREVIOUS:
+		MPD_SIMPLE ("previous")
+		return true;
+	case USER_ACTION_MPD_TOGGLE:
+		if      (g_ctx.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1")
+		else if (g_ctx.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0")
+		else                                    MPD_SIMPLE ("play")
+		return true;
+	case USER_ACTION_MPD_STOP:
+		MPD_SIMPLE ("stop")
+		return true;
+	case USER_ACTION_MPD_NEXT:
+		MPD_SIMPLE ("next")
+		return true;
+
+	// TODO: relative seeks
+#if 0
+		MPD_SIMPLE (forward,  "seekcur", "+10", NULL)
+		MPD_SIMPLE (backward, "seekcur", "-10", NULL)
+#endif
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 	case USER_ACTION_GOTO_ITEM_PREVIOUS:
 		app_one_item_up ();
 		return true;
@@ -1102,11 +1156,11 @@ app_process_user_action (enum user_action action)
 		return true;
 
 	case USER_ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll_up (LINES - (int) g_ctx.list_offset);
+		app_scroll_up (LINES - (int) g_ctx.top_height);
 		app_redraw_view ();
 		return true;
 	case USER_ACTION_GOTO_PAGE_NEXT:
-		app_scroll_down (LINES - (int) g_ctx.list_offset);
+		app_scroll_down (LINES - (int) g_ctx.top_height);
 		app_redraw_view ();
 		return true;
 
@@ -1205,11 +1259,41 @@ app_process_key (termo_key_t *event)
 static void
 app_process_left_mouse_click (int line, int column)
 {
-	if (line < g_ctx.list_offset - 1)
+	if (line == g_ctx.controls_offset)
 	{
-		// TODO: emulate some GUI widgets; this is going to be wild
+		// XXX: there could be a push_widget(buf, text, attrs, handler)
+		//   function to help with this but it might not be worth it
+		enum user_action action = USER_ACTION_NONE;
+		if (column >= 0 && column <=  1) action = USER_ACTION_MPD_PREVIOUS;
+		if (column >= 3 && column <=  4) action = USER_ACTION_MPD_TOGGLE;
+		if (column >= 6 && column <=  7) action = USER_ACTION_MPD_STOP;
+		if (column >= 9 && column <= 10) action = USER_ACTION_MPD_NEXT;
+		if (action)
+		{
+			app_process_user_action (action);
+			return;
+		}
+
+		int gauge_offset = column - g_ctx.gauge_offset;
+		if (g_ctx.gauge_offset >= 0
+		 && gauge_offset >= 0 && gauge_offset < g_ctx.gauge_width)
+		{
+			float position = (float) gauge_offset / g_ctx.gauge_width;
+			struct mpd_client *c = &g_ctx.client;
+			if (c->state == MPD_CONNECTED && g_ctx.song_duration >= 1)
+			{
+				char *where = xstrdup_printf
+					("%f", position * g_ctx.song_duration);
+				mpd_client_send_command (c, "seekcur", where, NULL);
+				free (where);
+
+				mpd_client_add_task (c, NULL, NULL);
+				mpd_client_idle (c, 0);
+			}
+			return;
+		}
 	}
-	else if (line == g_ctx.list_offset - 1)
+	else if (line == g_ctx.top_height - 1)
 	{
 		struct tab *winner = NULL;
 		int indent = strlen (APP_TITLE);
@@ -1230,7 +1314,7 @@ app_process_left_mouse_click (int line, int column)
 	else
 	{
 		struct tab *tab = g_ctx.active_tab;
-		int row_index = line - g_ctx.list_offset;
+		int row_index = line - g_ctx.top_height;
 		if (row_index >= (int) tab->item_count - tab->item_top)
 			return;
 
