@@ -788,6 +788,35 @@ app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
 }
 
 static void
+app_write_gauge (struct row_buffer *buf, float ratio, int width)
+{
+	// Always compute it in exactly eight times the resolution,
+	// because sometimes Unicode is even useful
+	int len_left = ratio * width * 8 + 0.5;
+
+	static const char *partials[] = { " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
+	int remainder = len_left % N_ELEMENTS (partials);
+	len_left /= N_ELEMENTS (partials);
+
+	// Assuming that if we can show the 1/8 box then we can show them all
+	const char *partial = NULL;
+	// TODO: cache this setting and make it configurable since it doesn't seem
+	//   to work 100% (e.g. incompatible with undelining in urxvt)
+	if (!app_is_character_in_locale (L'▏'))
+		len_left += remainder >= (int) N_ELEMENTS (partials) / 2;
+	else
+		partial = partials[remainder];
+
+	int len_right = width - len_left;
+	while (len_left-- > 0)
+		row_buffer_append (buf, " ", APP_ATTR (ELAPSED));
+	if (partial && len_right-- > 0)
+		row_buffer_append (buf, partial, APP_ATTR (REMAINS));
+	while (len_right-- > 0)
+		row_buffer_append (buf, " ", APP_ATTR (REMAINS));
+}
+
+static void
 app_redraw_status (void)
 {
 	if (g_ctx.state != PLAYER_STOPPED)
@@ -842,13 +871,8 @@ app_redraw_status (void)
 	if (!stopped && g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 1
 	 && remaining > 0)
 	{
-		int len_elapsed = (int) ((float) g_ctx.song_elapsed
-			/ g_ctx.song_duration * remaining + 0.5);
-		int len_remains = remaining - len_elapsed;
-		while (len_elapsed-- > 0)
-			row_buffer_append (&buf, " ", APP_ATTR (ELAPSED));
-		while (len_remains-- > 0)
-			row_buffer_append (&buf, " ", APP_ATTR (REMAINS));
+		app_write_gauge (&buf,
+			(float) g_ctx.song_elapsed / g_ctx.song_duration, remaining);
 	}
 	else while (remaining-- > 0)
 		row_buffer_append (&buf, " ", a_normal);
