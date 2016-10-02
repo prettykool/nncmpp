@@ -1235,7 +1235,8 @@ app_process_left_mouse_click (int line, int column)
 	{
 		struct tab *tab = g_ctx.active_tab;
 		int row_index = line - g_ctx.top_height;
-		if (row_index >= (int) tab->item_count - tab->item_top)
+		if (row_index < 0
+		 || row_index >= (int) tab->item_count - tab->item_top)
 			return;
 
 		tab->item_selected = row_index + tab->item_top;
