@@ -638,47 +638,6 @@ row_buffer_flush (struct row_buffer *self)
 	row_buffer_print (chunk, self->chars_tail->attrs);
 }
 
-// --- Help tab ----------------------------------------------------------------
-
-// TODO: either find something else to put in here or remove the wrapper struct
-static struct
-{
-	struct tab super;                   ///< Parent class
-}
-g_help_tab;
-
-static struct help_tab_item
-{
-	const char *text;                   ///< Item text
-}
-g_help_items[] =
-{
-	{ "First entry on the list" },
-	{ "Something different" },
-	{ "Yet another item" },
-};
-
-static void
-help_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer)
-{
-	(void) self;
-
-	hard_assert (item_index <= N_ELEMENTS (g_help_items));
-	row_buffer_append (buffer, g_help_items[item_index].text, 0);
-}
-
-static struct tab *
-help_tab_create ()
-{
-	struct tab *super = &g_help_tab.super;
-	tab_init (super, "Help");
-	super->on_item_draw = help_tab_on_item_draw;
-	super->item_count = N_ELEMENTS (g_help_items);
-	super->item_selected = 0;
-	return super;
-}
-
 // --- Rendering ---------------------------------------------------------------
 
 /// Write the given UTF-8 string padded with spaces.
@@ -1049,13 +1008,17 @@ app_one_item_down (void)
 }
 
 static bool
-app_goto_tab (unsigned n)
+app_goto_tab (int tab_index)
 {
-	// TODO: go to tab n, return false if out of range
+	int i = 0;
+	LIST_FOR_EACH (struct tab, iter, g_ctx.tabs)
+		if (i++ == tab_index)
+		{
+			g_ctx.active_tab = iter;
+			app_redraw ();
+			return true;
+		}
 	return false;
-
-	app_redraw ();
-	return true;
 }
 
 static void
@@ -1645,6 +1608,81 @@ app_on_reconnect (void *user_data)
 	free (address);
 }
 
+// --- Help tab ----------------------------------------------------------------
+
+// TODO: either find something else to put in here or remove the wrapper struct
+static struct
+{
+	struct tab super;                   ///< Parent class
+}
+g_help_tab;
+
+static struct help_tab_item
+{
+	const char *text;                   ///< Item text
+}
+g_help_items[] =
+{
+	{ "First entry on the list" },
+	{ "Something different" },
+	{ "Yet another item" },
+};
+
+static void
+help_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer)
+{
+	(void) self;
+
+	hard_assert (item_index <= N_ELEMENTS (g_help_items));
+	row_buffer_append (buffer, g_help_items[item_index].text, 0);
+}
+
+static struct tab *
+help_tab_create (void)
+{
+	struct tab *super = &g_help_tab.super;
+	tab_init (super, "Help");
+	super->on_item_draw = help_tab_on_item_draw;
+	super->item_count = N_ELEMENTS (g_help_items);
+	super->item_selected = 0;
+	return super;
+}
+
+// --- Debug tab ---------------------------------------------------------------
+
+static struct
+{
+	struct tab super;                   ///< Parent class
+	struct str_vector lines;            ///< Lines
+	bool active;                        ///< The tab is present
+}
+g_debug_tab;
+
+static void
+debug_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer)
+{
+	(void) self;
+
+	hard_assert (item_index <= g_debug_tab.lines.len);
+	row_buffer_append (buffer, g_debug_tab.lines.vector[item_index], 0);
+}
+
+static struct tab *
+debug_tab_create (void)
+{
+	str_vector_init (&g_debug_tab.lines);
+	g_debug_tab.active = true;
+
+	struct tab *super = &g_debug_tab.super;
+	tab_init (super, "Debug");
+	super->on_item_draw = debug_tab_on_item_draw;
+	super->item_count = 0;
+	super->item_selected = 0;
+	return super;
+}
+
 // --- Initialisation, event handling ------------------------------------------
 
 static void
@@ -1727,15 +1765,22 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	// If the standard error output isn't redirected, try our best at showing
 	// the message to the user; it will probably get overdrawn soon
 	// TODO: remember it somewhere so that it stays shown for a while
-	if (isatty (STDERR_FILENO))
+	if (!isatty (STDERR_FILENO))
+		fprintf (stderr, "%s\n", message.str);
+	else if (g_debug_tab.active)
+	{
+		str_vector_add (&g_debug_tab.lines, message.str);
+		// TODO: there should be a better, more efficient mechanism for this
+		g_debug_tab.super.item_count++;
+		app_redraw_view ();
+	}
+	else
 	{
 		// TODO: remember the position and attributes and restore them
 		attrset (A_REVERSE);
 		mvwhline (stdscr, LINES - 1, 0, A_REVERSE, COLS);
 		app_write_utf8 (message.str, 0, COLS);
 	}
-	else
-		fprintf (stderr, "%s\n", message.str);
 	str_free (&message);
 
 	in_processing = false;
@@ -1813,11 +1858,22 @@ main (int argc, char *argv[])
 	app_init_context ();
 	app_load_configuration ();
 	app_init_terminal ();
+
+	// Redirect all messages from liberty to a special tab so they're not lost
+	if (g_debug_mode)
+	{
+		struct tab *tab = debug_tab_create ();
+		LIST_PREPEND (g_ctx.tabs, tab);
+	}
+
 	g_log_message_real = app_log_handler;
 
-	// TODO: create more tabs
-	// TODO: in debug mode add a tab with all messages
-	LIST_PREPEND (g_ctx.tabs, help_tab_create ());
+	// TODO: create more tabs, beware of the list macro
+	{
+		struct tab *tab = help_tab_create ();
+		LIST_PREPEND (g_ctx.tabs, tab);
+	}
+
 	g_ctx.active_tab = g_ctx.tabs;
 	app_redraw ();
 
@@ -1833,4 +1889,3 @@ main (int argc, char *argv[])
 	app_free_context ();
 	return 0;
 }
-
