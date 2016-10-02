@@ -1090,6 +1090,8 @@ enum user_action
 	USER_ACTION_MPD_TOGGLE,
 	USER_ACTION_MPD_STOP,
 	USER_ACTION_MPD_NEXT,
+	USER_ACTION_MPD_VOLUME_UP,
+	USER_ACTION_MPD_VOLUME_DOWN,
 
 	USER_ACTION_GOTO_ITEM_PREVIOUS,
 	USER_ACTION_GOTO_ITEM_NEXT,
@@ -1138,6 +1140,22 @@ app_process_user_action (enum user_action action)
 		return true;
 	case USER_ACTION_MPD_NEXT:
 		MPD_SIMPLE ("next")
+		return true;
+	case USER_ACTION_MPD_VOLUME_UP:
+		if (g_ctx.volume >= 0)
+		{
+			char *volume = xstrdup_printf ("%d", MIN (100, g_ctx.volume + 10));
+			MPD_SIMPLE ("setvol", volume)
+			free (volume);
+		}
+		return true;
+	case USER_ACTION_MPD_VOLUME_DOWN:
+		if (g_ctx.volume >= 0)
+		{
+			char *volume = xstrdup_printf ("%d", MAX (0, g_ctx.volume - 10));
+			MPD_SIMPLE ("setvol", volume)
+			free (volume);
+		}
 		return true;
 
 	// TODO: relative seeks
@@ -1273,18 +1291,26 @@ static struct binding
 }
 g_default_bindings[] =
 {
-	{ "Escape",   USER_ACTION_QUIT               },
-	{ "Up",       USER_ACTION_GOTO_ITEM_PREVIOUS },
-	{ "Down",     USER_ACTION_GOTO_ITEM_NEXT     },
-	{ "PageUp",   USER_ACTION_GOTO_PAGE_PREVIOUS },
-	{ "PageDown", USER_ACTION_GOTO_PAGE_NEXT     },
-	{ "C-l",      USER_ACTION_REDRAW             },
-	{ "C-p",      USER_ACTION_GOTO_ITEM_PREVIOUS },
-	{ "C-n",      USER_ACTION_GOTO_ITEM_NEXT     },
-	{ "C-b",      USER_ACTION_GOTO_PAGE_PREVIOUS },
-	{ "C-f",      USER_ACTION_GOTO_PAGE_NEXT     },
-	// TODO: bindings for MPD control
-	{ NULL,       USER_ACTION_NONE               },
+	{ "Escape",     USER_ACTION_QUIT               },
+	{ "C-l",        USER_ACTION_REDRAW             },
+
+	{ "Up",         USER_ACTION_GOTO_ITEM_PREVIOUS },
+	{ "Down",       USER_ACTION_GOTO_ITEM_NEXT     },
+	{ "PageUp",     USER_ACTION_GOTO_PAGE_PREVIOUS },
+	{ "PageDown",   USER_ACTION_GOTO_PAGE_NEXT     },
+	{ "C-p",        USER_ACTION_GOTO_ITEM_PREVIOUS },
+	{ "C-n",        USER_ACTION_GOTO_ITEM_NEXT     },
+	{ "C-b",        USER_ACTION_GOTO_PAGE_PREVIOUS },
+	{ "C-f",        USER_ACTION_GOTO_PAGE_NEXT     },
+
+	// Not sure how to set these up, they're pretty arbitrary so far
+	{ "Left",       USER_ACTION_MPD_PREVIOUS       },
+	{ "Space",      USER_ACTION_MPD_TOGGLE         },
+	{ "C-Space",    USER_ACTION_MPD_STOP           },
+	{ "Right",      USER_ACTION_MPD_NEXT           },
+	{ "M-PageUp",   USER_ACTION_MPD_VOLUME_UP      },
+	{ "M-PageDown", USER_ACTION_MPD_VOLUME_DOWN    },
+	{ NULL,         USER_ACTION_NONE               },
 };
 
 static bool
@@ -1516,7 +1542,8 @@ mpd_on_events (unsigned subsystems, void *user_data)
 	(void) user_data;
 	struct mpd_client *c = &g_ctx.client;
 
-	if (subsystems & (MPD_SUBSYSTEM_PLAYER | MPD_SUBSYSTEM_PLAYLIST))
+	if (subsystems & (MPD_SUBSYSTEM_PLAYER
+		| MPD_SUBSYSTEM_PLAYLIST | MPD_SUBSYSTEM_MIXER))
 		mpd_request_info ();
 	else
 		mpd_client_idle (c, 0);
