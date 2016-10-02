@@ -1176,86 +1176,6 @@ app_process_user_action (enum user_action action)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-static bool
-app_process_keysym (termo_key_t *event)
-{
-	enum user_action action = USER_ACTION_NONE;
-	typedef const enum user_action ActionMap[TERMO_N_SYMS];
-
-	static ActionMap actions =
-	{
-		[TERMO_SYM_ESCAPE]    = USER_ACTION_QUIT,
-
-		[TERMO_SYM_UP]        = USER_ACTION_GOTO_ITEM_PREVIOUS,
-		[TERMO_SYM_DOWN]      = USER_ACTION_GOTO_ITEM_NEXT,
-		[TERMO_SYM_PAGEUP]    = USER_ACTION_GOTO_PAGE_PREVIOUS,
-		[TERMO_SYM_PAGEDOWN]  = USER_ACTION_GOTO_PAGE_NEXT,
-	};
-	static ActionMap actions_alt =
-	{
-	};
-	static ActionMap actions_ctrl =
-	{
-	};
-
-	if (!event->modifiers)
-		action = actions[event->code.sym];
-	else if (event->modifiers == TERMO_KEYMOD_ALT)
-		action = actions_alt[event->code.sym];
-	else if (event->modifiers == TERMO_KEYMOD_CTRL)
-		action = actions_ctrl[event->code.sym];
-
-	return app_process_user_action (action);
-}
-
-static bool
-app_process_ctrl_key (termo_key_t *event)
-{
-	static const enum user_action actions[32] =
-	{
-		[CTRL_KEY ('L')]      = USER_ACTION_REDRAW,
-
-		[CTRL_KEY ('P')]      = USER_ACTION_GOTO_ITEM_PREVIOUS,
-		[CTRL_KEY ('N')]      = USER_ACTION_GOTO_ITEM_NEXT,
-		[CTRL_KEY ('B')]      = USER_ACTION_GOTO_PAGE_PREVIOUS,
-		[CTRL_KEY ('F')]      = USER_ACTION_GOTO_PAGE_NEXT,
-	};
-
-	int64_t i = (int64_t) event->code.codepoint - 'a' + 1;
-	if (i > 0 && i < (int64_t) N_ELEMENTS (actions))
-		return app_process_user_action (actions[i]);
-
-	return true;
-}
-
-static bool
-app_process_alt_key (termo_key_t *event)
-{
-	if (event->code.codepoint >= '0'
-	 && event->code.codepoint <= '9')
-	{
-		int n = event->code.codepoint - '0';
-		if (!app_goto_tab ((n == 0 ? 10 : n) - 1))
-			beep ();
-	}
-	return true;
-}
-
-static bool
-app_process_key (termo_key_t *event)
-{
-	if (event->modifiers == TERMO_KEYMOD_CTRL)
-		return app_process_ctrl_key (event);
-	if (event->modifiers == TERMO_KEYMOD_ALT)
-		return app_process_alt_key (event);
-	if (event->modifiers)
-		return true;
-
-	// TODO: normal unmodified keys will have functions as well
-	ucs4_t c = event->code.codepoint;
-	return true;
-}
-
 static void
 app_process_left_mouse_click (int line, int column)
 {
@@ -1343,20 +1263,62 @@ app_process_mouse (termo_key_t *event)
 	return true;
 }
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static struct binding
+{
+	const char *key;                    ///< Key definition
+	enum user_action action;            ///< Action to take
+}
+g_default_bindings[] =
+{
+	{ "Escape",   USER_ACTION_QUIT               },
+	{ "Up",       USER_ACTION_GOTO_ITEM_PREVIOUS },
+	{ "Down",     USER_ACTION_GOTO_ITEM_NEXT     },
+	{ "PageUp",   USER_ACTION_GOTO_PAGE_PREVIOUS },
+	{ "PageDown", USER_ACTION_GOTO_PAGE_NEXT     },
+	{ "C-l",      USER_ACTION_REDRAW             },
+	{ "C-p",      USER_ACTION_GOTO_ITEM_PREVIOUS },
+	{ "C-n",      USER_ACTION_GOTO_ITEM_NEXT     },
+	{ "C-b",      USER_ACTION_GOTO_PAGE_PREVIOUS },
+	{ "C-f",      USER_ACTION_GOTO_PAGE_NEXT     },
+	// TODO: bindings for MPD control
+	{ NULL,       USER_ACTION_NONE               },
+};
+
 static bool
 app_process_termo_event (termo_key_t *event)
 {
-	switch (event->type)
-	{
-	case TERMO_TYPE_MOUSE:
+	if (event->type == TERMO_TYPE_MOUSE)
 		return app_process_mouse (event);
-	case TERMO_TYPE_KEY:
-		return app_process_key (event);
-	case TERMO_TYPE_KEYSYM:
-		return app_process_keysym (event);
-	default:
+
+	// TODO: pre-parse the keys, order them by termo_keycmp() and binary search
+	for (struct binding *iter = g_default_bindings; iter->key; iter++)
+	{
+		termo_key_t key;
+		// FIXME: I've made termo parse it as a multibyte string, I want UTF-8
+		hard_assert (!*termo_strpkey (g_ctx.tk, iter->key, &key,
+			TERMO_FORMAT_ALTISMETA));
+		if (!termo_keycmp (g_ctx.tk, event, &key))
+			return app_process_user_action (iter->action);
+	}
+
+	// TODO: parametrize actions, put this among other bindings
+	if (event->modifiers == TERMO_KEYMOD_ALT
+	 && event->code.codepoint >= '0'
+	 && event->code.codepoint <= '9')
+	{
+		int n = event->code.codepoint - '0';
+		if (!app_goto_tab ((n == 0 ? 10 : n) - 1))
+			beep ();
 		return true;
 	}
+	if (!event->modifiers)
+	{
+		// TODO: normal unmodified keys will have functions as well
+		ucs4_t c = event->code.codepoint;
+	}
+	return true;
 }
 
 // --- Signals -----------------------------------------------------------------
