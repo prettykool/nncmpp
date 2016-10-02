@@ -1490,12 +1490,16 @@ mpd_on_info_response (const struct mpd_response *response,
 		g_ctx.song_duration = tmp;
 
 	// TODO: use "time" as a fallback (no milliseconds there)
-	char *elapsed = str_map_find (&map, "elapsed");
-	if (elapsed && g_ctx.state == PLAYER_PLAYING)
+	char *period, *elapsed = str_map_find (&map, "elapsed");
+	if (elapsed && (period = strchr (elapsed, '.')))
 	{
-		// TODO: parse the "elapsed" value and use it
-		char *period = strchr (elapsed, '.');
-		if (period && xstrtoul (&tmp, period + 1, 10))
+		// For some reason this is much more precise
+		*period++ = '\0';
+		if (xstrtoul (&tmp, elapsed, 10))
+			g_ctx.song_elapsed = tmp;
+
+		if (g_ctx.state == PLAYER_PLAYING
+		 && xstrtoul (&tmp, period, 10))
 		{
 			// TODO: initialize the timer and create a callback
 			poller_timer_set (&g_ctx.elapsed_event, 1000 - tmp);
