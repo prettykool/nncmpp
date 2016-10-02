@@ -6,14 +6,16 @@ of Sonata.  I had already written a lot of the required code before, so I had
 the perfect opportunity to get rid of the unmaintained Python application and
 make the first TUI client that doesn't feel awkward to use.
 
-Since I only use the filesystem browsing mode, that's also the only thing
-I care to implement.  Anything else will have to be user-contributed while
-I focus on things that aren't worthless to me.
-
 If it's not obvious enough, the name is a pun on all those ridiculous client
 names, and should be pronounced as "nincompoop".
 
-Currently it's under development and doesn't do much.
+Features
+--------
+Currently it's under development and doesn't do much else than show the status.
+
+Since I only use the filesystem browsing mode, that's also the only thing
+I care to implement.  Anything else will have to be user-contributed while
+I focus on things that aren't worthless to me.
 
 Packages
 --------
@@ -66,6 +68,16 @@ colors = {
 	odd = "16 255"
 }
 ....
+
+Terminal caveats
+----------------
+This application aspires to be as close to a GUI as possible.  It expects you
+to use the mouse (though it's not required).  Terminals are, however, somewhat
+tricky to get consistent results on, so be aware of the following:
+
+ - use a UTF-8 locale to get finer resolution progress bars and scrollbars
+ - Xterm needs `XTerm*metaSendsEscape: true` for the default bindings to work
+ - urxvt's 'vtwheel' plugin sabotages scrolling
 
 Contributing and Support
 ------------------------
