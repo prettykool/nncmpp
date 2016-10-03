@@ -113,7 +113,8 @@ update_curses_terminal_size (void)
 	\
 	XX( EVEN,       "even",       -1, -1, 0           ) \
 	XX( ODD,        "odd",        -1, -1, 0           ) \
-	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   )
+	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
+	XX( SCROLLBAR,  "scrollbar",  -1, -1, 0           )
 
 enum
 {
@@ -150,6 +151,7 @@ struct row_buffer;
 typedef bool (*tab_event_fn) (struct tab *self, termo_key_t *event);
 
 /// Draw an item to the screen using the row buffer API
+// TODO: this will probably want to know the actual width
 typedef void (*tab_item_draw_fn)
 	(struct tab *self, unsigned item_index, struct row_buffer *buffer);
 
@@ -230,6 +232,7 @@ static struct app_context
 	termo_t *tk;                        ///< termo handle
 	struct poller_timer tk_timer;       ///< termo timeout timer
 	bool locale_is_utf8;                ///< The locale is Unicode
+	bool use_partial_boxes;             ///< Use Unicode box drawing chars
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
@@ -410,6 +413,10 @@ app_init_context (void)
 	// since the locale name is canonicalized by locale_charset().
 	// Note that non-Unicode locales are handled pretty inefficiently.
 	g_ctx.locale_is_utf8 = !strcasecmp_ascii (locale_charset (), "UTF-8");
+
+	// It doesn't work 100% (e.g. incompatible with undelining in urxvt)
+	// TODO: make this configurable
+	g_ctx.use_partial_boxes = g_ctx.locale_is_utf8;
 
 	app_init_attributes ();
 }
@@ -762,18 +769,15 @@ app_write_gauge (struct row_buffer *buf, float ratio, int width)
 	// because sometimes Unicode is even useful
 	int len_left = ratio * width * 8 + 0.5;
 
-	static const char *partials[] = { " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
-	int remainder = len_left % N_ELEMENTS (partials);
-	len_left /= N_ELEMENTS (partials);
+	static const char *partials[] = { " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉" };
+	int remainder = len_left % 8;
+	len_left /= 8;
 
-	// Assuming that if we can show the 1/8 box then we can show them all
 	const char *partial = NULL;
-	// TODO: cache this setting and make it configurable since it doesn't seem
-	//   to work 100% (e.g. incompatible with undelining in urxvt)
-	if (!app_is_character_in_locale (L'▏'))
-		len_left += remainder >= (int) N_ELEMENTS (partials) / 2;
-	else
+	if (g_ctx.use_partial_boxes)
 		partial = partials[remainder];
+	else
+		len_left += remainder >= (int) 4;
 
 	int len_right = width - len_left;
 	while (len_left-- > 0)
@@ -902,39 +906,119 @@ app_redraw_top (void)
 	refresh ();
 }
 
+static int
+app_visible_items (void)
+{
+	// This may eventually include a header bar and/or a status bar
+	return MAX (0, LINES - g_ctx.top_height);
+}
+
+static void
+app_redraw_scrollbar (void)
+{
+	// This assumes that we can write to the one-before-last column,
+	// i.e. that it's not covered by any double-wide character (and that
+	// ncurses comes to the right results when counting characters).
+	//
+	// We could also precompute the scrollbar and append it to each row
+	// as we render them, plus all the unoccupied rows.
+	struct tab *tab = g_ctx.active_tab;
+	int visible_items = app_visible_items ();
+
+	if (!g_ctx.use_partial_boxes)
+	{
+		// Apparently here we don't want the 0.5 rounding constant
+		int length = (float) visible_items / (int) tab->item_count
+			* (visible_items - 1);
+		int start  = (float) tab->item_top / (int) tab->item_count
+			* (visible_items - 1);
+
+		for (int row = 0; row < visible_items; row++)
+		{
+			move (g_ctx.top_height + row, COLS - 1);
+			if (row < start || row > start + length + 1)
+				addch (' ' | APP_ATTR (SCROLLBAR));
+			else
+				addch (' ' | APP_ATTR (SCROLLBAR) | A_REVERSE);
+		}
+		return;
+	}
+
+	// TODO: clamp the values, make sure they follow the right order
+	// We subtract half a character from both the top and the bottom, hence -1
+	int length = (float) visible_items / (int) tab->item_count
+		* (visible_items - 1) * 8 + 0.5;
+	int start  = (float) tab->item_top / (int) tab->item_count
+		* (visible_items - 1) * 8 + 0.5;
+
+	// Then we make sure the bar is high at least one character, hence +8
+	int end = start + length + 8;
+
+	int start_part = start % 8; start /= 8;
+	int end_part   = end   % 8; end   /= 8;
+
+	// Even with this, the solid part must be at least one character high
+	static const char *partials[] = { "█", "▇", "▆", "▅", "▄", "▃", "▂", "▁" };
+
+	for (int row = 0; row < visible_items; row++)
+	{
+		chtype attrs = APP_ATTR (SCROLLBAR);
+		if (row > start && row <= end)
+			attrs ^= A_REVERSE;
+
+		const char *c = " ";
+		if (row == start) c = partials[start_part];
+		if (row == end)   c = partials[end_part];
+
+		move (g_ctx.top_height + row, COLS - 1);
+
+		struct row_buffer buf;
+		row_buffer_init (&buf);
+		row_buffer_append (&buf, c, attrs);
+		row_buffer_flush (&buf);
+		row_buffer_free (&buf);
+	}
+}
+
 static void
 app_redraw_view (void)
 {
 	move (g_ctx.top_height, 0);
 	clrtobot ();
 
-	// TODO: display a scrollbar on the right side
 	struct tab *tab = g_ctx.active_tab;
+	bool want_scrollbar = (int) tab->item_count > app_visible_items ();
+	int view_width = COLS - want_scrollbar;
+
 	int to_show = MIN (LINES - g_ctx.top_height,
 		(int) tab->item_count - tab->item_top);
-	for (int row_index = 0; row_index < to_show; row_index++)
+	for (int row = 0; row < to_show; row++)
 	{
-		int item_index = tab->item_top + row_index;
+		int item_index = tab->item_top + row;
 		int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
 		if (item_index == tab->item_selected)
 			row_attrs = APP_ATTR (SELECTION);
 
 		attrset (row_attrs);
+		move (g_ctx.top_height + row, 0);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
 
 		tab->on_item_draw (tab, item_index, &buf);
-		if (buf.total_width > COLS)
-			row_buffer_ellipsis (&buf, COLS, row_attrs);
+		if (buf.total_width > view_width)
+			row_buffer_ellipsis (&buf, view_width, row_attrs);
 
 		row_buffer_flush (&buf);
-		for (int i = buf.total_width; i < COLS; i++)
+		for (int i = buf.total_width; i < view_width; i++)
 			addch (' ');
 		row_buffer_free (&buf);
 	}
-
 	attrset (0);
+
+	if (want_scrollbar)
+		app_redraw_scrollbar ();
+
 	refresh ();
 }
 
@@ -946,13 +1030,6 @@ app_redraw (void)
 }
 
 // --- Actions -----------------------------------------------------------------
-
-static int
-app_visible_items (void)
-{
-	// This may eventually include a header bar and/or a status bar
-	return MAX (0, LINES - g_ctx.top_height);
-}
 
 /// Checks what items that are visible and returns if fixes were needed
 static bool
