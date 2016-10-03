@@ -873,11 +873,13 @@ app_redraw_top (void)
 		app_redraw_status ();
 		break;
 	case MPD_CONNECTING:
-		app_next_row (APP_ATTR (HEADER));
+		attrset (APP_ATTR (HEADER));
+		app_next_row (0);
 		app_write_utf8 ("Connecting to MPD...", APP_ATTR (HEADER), COLS);
 		break;
 	case MPD_DISCONNECTED:
-		app_next_row (APP_ATTR (HEADER));
+		attrset (APP_ATTR (HEADER));
+		app_next_row (0);
 		app_write_utf8 ("Disconnected", APP_ATTR (HEADER), COLS);
 	}
 
