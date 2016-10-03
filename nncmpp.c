@@ -1324,7 +1324,16 @@ app_process_left_mouse_click (int line, int column)
 		 || row_index >= (int) tab->item_count - tab->item_top)
 			return;
 
-		tab->item_selected = row_index + tab->item_top;
+		// TODO: handle the scrollbar a bit better than this
+		int visible_items = app_visible_items ();
+		if ((int) tab->item_count > visible_items && column == COLS - 1)
+		{
+			tab->item_top = (float) row_index / visible_items
+				* (int) tab->item_count - visible_items / 2;
+			app_fix_view_range ();
+		}
+		else
+			tab->item_selected = row_index + tab->item_top;
 		app_redraw_view ();
 	}
 }
