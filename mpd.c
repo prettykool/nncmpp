@@ -1,4 +1,5 @@
 // Copied from desktop-tools, should go to liberty if it proves useful
+// XXX: changed: added a debugging callback instead of hardcoded print_debug
 
 // --- MPD client interface ----------------------------------------------------
 
@@ -107,6 +108,9 @@ struct mpd_client
 	/// Callback to receive "idle" updates.
 	/// Remember to restart the idle if needed.
 	void (*on_event) (unsigned subsystems, void *user_data);
+
+	/// Callback to trace protocol I/O
+	void (*on_io_hook) (void *user_data, bool outgoing, const char *line);
 };
 
 static void mpd_client_reset (struct mpd_client *self);
@@ -258,7 +262,8 @@ mpd_client_parse_hello (struct mpd_client *self, const char *line)
 static bool
 mpd_client_parse_line (struct mpd_client *self, const char *line)
 {
-	print_debug ("MPD >> %s", line);
+	if (self->on_io_hook)
+		self->on_io_hook (self->user_data, false, line);
 
 	if (!self->got_hello)
 		return mpd_client_parse_hello (self, line);
@@ -414,7 +419,9 @@ mpd_client_send_commandv (struct mpd_client *self, char **commands)
 			str_append (&line, *commands);
 	}
 
-	print_debug ("MPD << %s", line.str);
+	if (self->on_io_hook)
+		self->on_io_hook (self->user_data, true, line.str);
+
 	str_append_c (&line, '\n');
 	str_append_str (&self->write_buffer, &line);
 	str_free (&line);

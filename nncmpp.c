@@ -20,9 +20,44 @@
 
 #include "config.h"
 
+// We "need" to have an enum for attributes before including liberty.
+// Avoiding colours in the defaults here in order to support dumb terminals.
+#define ATTRIBUTE_TABLE(XX)                             \
+	XX( HEADER,     "header",     -1, -1, 0           ) \
+	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD      ) \
+	/* Gauge                                         */ \
+	XX( ELAPSED,    "elapsed",    -1, -1, A_REVERSE   ) \
+	XX( REMAINS,    "remains",    -1, -1, A_UNDERLINE ) \
+	/* Tab bar                                       */ \
+	XX( TAB_BAR,    "tab_bar",    -1, -1, A_REVERSE   ) \
+	XX( TAB_ACTIVE, "tab_active", -1, -1, A_UNDERLINE ) \
+	/* Listview                                      */ \
+	XX( EVEN,       "even",       -1, -1, 0           ) \
+	XX( ODD,        "odd",        -1, -1, 0           ) \
+	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
+	XX( SCROLLBAR,  "scrollbar",  -1, -1, 0           ) \
+	/* These are for debugging only                  */ \
+	XX( WARNING,    "warning",     3, -1, 0           ) \
+	XX( ERROR,      "error",       1, -1, 0           ) \
+	XX( INCOMING,   "incoming",    2, -1, 0           ) \
+	XX( OUTGOING,   "outgoing",    4, -1, 0           )
+
+enum
+{
+#define XX(name, config, fg_, bg_, attrs_) ATTRIBUTE_ ## name,
+	ATTRIBUTE_TABLE (XX)
+#undef XX
+	ATTRIBUTE_COUNT
+};
+
 // My battle-tested C framework acting as a GLib replacement.  Its one big
 // disadvantage is missing support for i18n but that can eventually be added
 // as an optional feature.  Localised applications look super awkward, though.
+
+// User data for logger functions to enable formatted logging
+#define print_fatal_data    ((void *) ATTRIBUTE_ERROR)
+#define print_error_data    ((void *) ATTRIBUTE_ERROR)
+#define print_warning_data  ((void *) ATTRIBUTE_WARNING)
 
 #define LIBERTY_WANT_POLLER
 #define LIBERTY_WANT_ASYNC
@@ -100,39 +135,6 @@ update_curses_terminal_size (void)
 // Function names are prefixed mostly because of curses which clutters the
 // global namespace and makes it harder to distinguish what functions relate to.
 
-// Avoiding colours in the defaults here in order to support dumb terminals
-#define ATTRIBUTE_TABLE(XX)                             \
-	XX( HEADER,     "header",     -1, -1, 0           ) \
-	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD      ) \
-	\
-	XX( ELAPSED,    "elapsed",    -1, -1, A_REVERSE   ) \
-	XX( REMAINS,    "remains",    -1, -1, A_UNDERLINE ) \
-	\
-	XX( TAB_BAR,    "tab_bar",    -1, -1, A_REVERSE   ) \
-	XX( TAB_ACTIVE, "tab_active", -1, -1, A_UNDERLINE ) \
-	\
-	XX( EVEN,       "even",       -1, -1, 0           ) \
-	XX( ODD,        "odd",        -1, -1, 0           ) \
-	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
-	XX( SCROLLBAR,  "scrollbar",  -1, -1, 0           )
-
-enum
-{
-#define XX(name, config, fg_, bg_, attrs_) ATTRIBUTE_ ## name,
-	ATTRIBUTE_TABLE (XX)
-#undef XX
-	ATTRIBUTE_COUNT
-};
-
-struct attrs
-{
-	short fg;                           ///< Foreground colour index
-	short bg;                           ///< Background colour index
-	chtype attrs;                       ///< Other attributes
-};
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 // The user interface is focused on conceptual simplicity.  That is important
 // since we're not using any TUI framework (which are mostly a lost cause to me
 // in the post-Unicode era and not worth pursuing), and the code would get
@@ -151,9 +153,8 @@ struct row_buffer;
 typedef bool (*tab_event_fn) (struct tab *self, termo_key_t *event);
 
 /// Draw an item to the screen using the row buffer API
-// TODO: this will probably want to know the actual width
-typedef void (*tab_item_draw_fn)
-	(struct tab *self, unsigned item_index, struct row_buffer *buffer);
+typedef void (*tab_item_draw_fn) (struct tab *self,
+	unsigned item_index, struct row_buffer *buffer, int width);
 
 struct tab
 {
@@ -180,6 +181,13 @@ struct tab
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+struct attrs
+{
+	short fg;                           ///< Foreground colour index
+	short bg;                           ///< Background colour index
+	chtype attrs;                       ///< Other attributes
+};
 
 enum player_state { PLAYER_STOPPED, PLAYER_PLAYING, PLAYER_PAUSED };
 
@@ -1005,7 +1013,13 @@ app_redraw_view (void)
 		struct row_buffer buf;
 		row_buffer_init (&buf);
 
-		tab->on_item_draw (tab, item_index, &buf);
+		tab->on_item_draw (tab, item_index, &buf, view_width);
+		if (item_index == tab->item_selected)
+		{
+			// Make it so that the selection color always wins
+			LIST_FOR_EACH (struct row_char, iter, buf.chars)
+				iter->attrs &= ~(A_COLOR | A_REVERSE);
+		}
 		if (buf.total_width > view_width)
 			row_buffer_ellipsis (&buf, view_width, row_attrs);
 
@@ -1682,6 +1696,8 @@ mpd_on_failure (void *user_data)
 	mpd_queue_reconnect ();
 }
 
+static void mpd_on_io_hook (void *user_data, bool outgoing, const char *line);
+
 static void
 app_on_reconnect (void *user_data)
 {
@@ -1691,6 +1707,7 @@ app_on_reconnect (void *user_data)
 	c->on_failure   = mpd_on_failure;
 	c->on_connected = mpd_on_connected;
 	c->on_event     = mpd_on_events;
+	c->on_io_hook   = mpd_on_io_hook;
 
 	// We accept hostname/IPv4/IPv6 in pseudo-URL format, as well as sockets
 	char *address = xstrdup (get_config_string (g_ctx.config.root,
@@ -1744,9 +1761,10 @@ g_help_items[] =
 
 static void
 help_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer)
+	struct row_buffer *buffer, int width)
 {
 	(void) self;
+	(void) width;
 
 	hard_assert (item_index <= N_ELEMENTS (g_help_items));
 	row_buffer_append (buffer, g_help_items[item_index].text, 0);
@@ -1765,28 +1783,80 @@ help_tab_create (void)
 
 // --- Debug tab ---------------------------------------------------------------
 
+struct debug_item
+{
+	char *text;                         ///< Logged line
+	int64_t timestamp;                  ///< Timestamp
+	chtype attrs;                       ///< Line attributes
+};
+
 static struct
 {
 	struct tab super;                   ///< Parent class
-	struct str_vector lines;            ///< Lines
+	struct debug_item *items;           ///< Items
+	size_t items_alloc;                 ///< How many items are allocated
 	bool active;                        ///< The tab is present
 }
 g_debug_tab;
 
 static void
 debug_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer)
+	struct row_buffer *buffer, int width)
 {
 	(void) self;
 
-	hard_assert (item_index <= g_debug_tab.lines.len);
-	row_buffer_append (buffer, g_debug_tab.lines.vector[item_index], 0);
+	hard_assert (item_index <= g_debug_tab.super.item_count);
+	struct debug_item *item = &g_debug_tab.items[item_index];
+
+	char buf[16];
+	struct tm tm;
+	time_t when = item->timestamp / 1000;
+	strftime (buf, sizeof buf, "%T", localtime_r (&when, &tm));
+
+	char *prefix = xstrdup_printf
+		("%s.%03d", buf, (int) (item->timestamp % 1000));
+	row_buffer_append (buffer, prefix, 0);
+	free (prefix);
+
+	row_buffer_append (buffer, " ", item->attrs);
+	row_buffer_append (buffer, item->text, item->attrs);
+
+	// We override the formatting including colors -- do it for the whole line
+	if (buffer->total_width > width)
+		row_buffer_ellipsis (buffer, width, item->attrs);
+	while (buffer->total_width < width)
+		row_buffer_append (buffer, " ", item->attrs);
+}
+
+static void
+debug_tab_push (const char *message, chtype attrs)
+{
+	// TODO: uh... aren't we rather going to write our own abstraction?
+	if (g_debug_tab.items_alloc <= g_debug_tab.super.item_count)
+	{
+		g_debug_tab.items = xreallocarray (g_debug_tab.items,
+			sizeof *g_debug_tab.items, (g_debug_tab.items_alloc <<= 1));
+	}
+
+	// TODO: there should be a better, more efficient mechanism for this
+	struct debug_item *item =
+		&g_debug_tab.items[g_debug_tab.super.item_count++];
+	item->text = xstrdup (message);
+	item->attrs = attrs;
+
+	struct timespec tp;
+	hard_assert (clock_gettime (CLOCK_REALTIME, &tp) != -1);
+	item->timestamp = (int64_t) tp.tv_sec * 1000
+		+ (int64_t) tp.tv_nsec / 1000000;
+
+	app_redraw_view ();
 }
 
 static struct tab *
 debug_tab_create (void)
 {
-	str_vector_init (&g_debug_tab.lines);
+	g_debug_tab.items = xcalloc
+		((g_debug_tab.items_alloc = 16), sizeof *g_debug_tab.items);
 	g_debug_tab.active = true;
 
 	struct tab *super = &g_debug_tab.super;
@@ -1795,6 +1865,28 @@ debug_tab_create (void)
 	super->item_count = 0;
 	super->item_selected = 0;
 	return super;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+mpd_on_io_hook (void *user_data, bool outgoing, const char *line)
+{
+	(void) user_data;
+
+	struct str s;
+	str_init (&s);
+	if (outgoing)
+	{
+		str_append_printf (&s, "<< %s", line);
+		debug_tab_push (s.str, APP_ATTR (OUTGOING));
+	}
+	else
+	{
+		str_append_printf (&s, ">> %s", line);
+		debug_tab_push (s.str, APP_ATTR (INCOMING));
+	}
+	str_free (&s);
 }
 
 // --- Initialisation, event handling ------------------------------------------
@@ -1869,9 +1961,6 @@ static void
 app_log_handler (void *user_data, const char *quote, const char *fmt,
 	va_list ap)
 {
-	// TODO: we might want to make use of the user_data (attribute?)
-	(void) user_data;
-
 	// We certainly don't want to end up in a possibly infinite recursion
 	static bool in_processing;
 	if (in_processing)
@@ -1891,10 +1980,8 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 		fprintf (stderr, "%s\n", message.str);
 	else if (g_debug_tab.active)
 	{
-		str_vector_add (&g_debug_tab.lines, message.str);
-		// TODO: there should be a better, more efficient mechanism for this
-		g_debug_tab.super.item_count++;
-		app_redraw_view ();
+		debug_tab_push (message.str,
+			user_data == NULL ? 0 : g_ctx.attrs[(intptr_t) user_data].attrs);
 	}
 	else
 	{
