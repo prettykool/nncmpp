@@ -947,66 +947,76 @@ app_redraw (void)
 
 // --- Actions -----------------------------------------------------------------
 
-/// Scroll up @a n items.  Doesn't redraw.
+static int
+app_visible_items (void)
+{
+	// This may eventually include a header bar and/or a status bar
+	return MAX (0, LINES - g_ctx.top_height);
+}
+
+/// Checks what items that are visible and returns if fixes were needed
 static bool
-app_scroll_up (int n)
+app_fix_view_range (void)
 {
 	struct tab *tab = g_ctx.active_tab;
-	if (tab->item_top < n)
+	if (tab->item_top < 0)
 	{
 		tab->item_top = 0;
 		return false;
 	}
-	tab->item_top -= n;
-	return true;
-}
 
-/// Scroll down @a n items.  Doesn't redraw.
-static bool
-app_scroll_down (int n)
-{
-	struct tab *tab = g_ctx.active_tab;
-	// TODO: if (n_items >= lines), don't allow to scroll off past the end
-	if ((tab->item_top += n) >= (int) tab->item_count)
+	// If the contents are at least as long as the screen, always fill it
+	int max_item_top = (int) tab->item_count - app_visible_items ();
+	// But don't let that suggest a negative offset
+	max_item_top = MAX (max_item_top, 0);
+
+	if (tab->item_top > max_item_top)
 	{
-		if (tab->item_count)
-			tab->item_top = tab->item_count - 1;
-		else
-			tab->item_top = 0;
+		tab->item_top = max_item_top;
 		return false;
 	}
 	return true;
 }
 
-/// Moves the selection one item up.
+/// Scroll down (positive) or up (negative) @a n items.  Doesn't redraw.
 static bool
-app_one_item_up (void)
+app_scroll (int n)
 {
-	struct tab *tab = g_ctx.active_tab;
-	if (tab->item_selected < 1)
-		return false;
-
-	if (--tab->item_selected < tab->item_top)
-		app_scroll_up (tab->item_top - tab->item_selected);
-
-	app_redraw_view ();
-	return true;
+	g_ctx.active_tab->item_top += n;
+	return app_fix_view_range ();
 }
 
-/// Moves the selection one item down.
-static bool
-app_one_item_down (void)
+static void
+app_ensure_selection_visible (void)
 {
 	struct tab *tab = g_ctx.active_tab;
-	if (tab->item_selected + 1 >= (int) tab->item_count)
-		return false;
+	if (tab->item_selected < 0)
+		return;
 
-	int n_visible = LINES - g_ctx.top_height;
-	if (++tab->item_selected >= tab->item_top + n_visible)
-		app_scroll_down (1);
+	int too_high = tab->item_top - tab->item_selected;
+	if (too_high > 0)
+		app_scroll (-too_high);
 
+	int too_low = tab->item_selected
+		- (tab->item_top + app_visible_items () - 1);
+	if (too_low > 0)
+		app_scroll (too_low);
+}
+
+static bool
+app_move_selection (int diff)
+{
+	struct tab *tab = g_ctx.active_tab;
+	int fixed = tab->item_selected += diff;
+	fixed = MAX (fixed, 0);
+	fixed = MIN (fixed, (int) tab->item_count - 1);
+
+	bool result = tab->item_selected != fixed;
+	tab->item_selected = fixed;
+
+	app_ensure_selection_visible ();
 	app_redraw_view ();
-	return true;
+	return result;
 }
 
 static bool
@@ -1021,25 +1031,6 @@ app_goto_tab (int tab_index)
 			return true;
 		}
 	return false;
-}
-
-static void
-app_process_resize (void)
-{
-	struct tab *tab = g_ctx.active_tab;
-	if (tab->item_selected < 0)
-		return;
-
-	int n_visible = LINES - g_ctx.top_height;
-	if (n_visible < 0)
-		return;
-
-	// Scroll up as needed to keep the selection visible
-	int selected_offset = tab->item_selected - tab->item_top;
-	if (selected_offset >= n_visible)
-		app_scroll_up (selected_offset - n_visible + 1);
-
-	app_redraw ();
 }
 
 // --- User input handling -----------------------------------------------------
@@ -1058,6 +1049,11 @@ enum user_action
 	USER_ACTION_MPD_VOLUME_UP,
 	USER_ACTION_MPD_VOLUME_DOWN,
 
+	USER_ACTION_SCROLL_UP,
+	USER_ACTION_SCROLL_DOWN,
+
+	USER_ACTION_GOTO_TOP,
+	USER_ACTION_GOTO_BOTTOM,
 	USER_ACTION_GOTO_ITEM_PREVIOUS,
 	USER_ACTION_GOTO_ITEM_NEXT,
 	USER_ACTION_GOTO_PAGE_PREVIOUS,
@@ -1081,6 +1077,7 @@ static bool
 app_process_user_action (enum user_action action)
 {
 	struct mpd_client *c = &g_ctx.client;
+	struct tab *tab = g_ctx.active_tab;
 	switch (action)
 	{
 	case USER_ACTION_QUIT:
@@ -1131,20 +1128,48 @@ app_process_user_action (enum user_action action)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+		// XXX: these should rather be parametrized
+	case USER_ACTION_SCROLL_UP:
+		app_scroll (-3);
+		app_redraw_view ();
+		return true;
+	case USER_ACTION_SCROLL_DOWN:
+		app_scroll (3);
+		app_redraw_view ();
+		return true;
+
+	case USER_ACTION_GOTO_TOP:
+		if (tab->item_count)
+		{
+			g_ctx.active_tab->item_selected = 0;
+			app_ensure_selection_visible ();
+			app_redraw_view ();
+		}
+		return true;
+	case USER_ACTION_GOTO_BOTTOM:
+		if (tab->item_count)
+		{
+			g_ctx.active_tab->item_selected =
+				(int) g_ctx.active_tab->item_count - 1;
+			app_ensure_selection_visible ();
+			app_redraw_view ();
+		}
+		return true;
+
 	case USER_ACTION_GOTO_ITEM_PREVIOUS:
-		app_one_item_up ();
+		app_move_selection (-1);
 		return true;
 	case USER_ACTION_GOTO_ITEM_NEXT:
-		app_one_item_down ();
+		app_move_selection (1);
 		return true;
 
 	case USER_ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll_up (LINES - (int) g_ctx.top_height);
-		app_redraw_view ();
+		app_scroll ((int) g_ctx.top_height - LINES);
+		app_move_selection ((int) g_ctx.top_height - LINES);
 		return true;
 	case USER_ACTION_GOTO_PAGE_NEXT:
-		app_scroll_down (LINES - (int) g_ctx.top_height);
-		app_redraw_view ();
+		app_scroll (LINES - (int) g_ctx.top_height);
+		app_move_selection (LINES - (int) g_ctx.top_height);
 		return true;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1240,9 +1265,9 @@ app_process_mouse (termo_key_t *event)
 	if (button == 1)
 		app_process_left_mouse_click (line, column);
 	else if (button == 4)
-		app_process_user_action (USER_ACTION_GOTO_ITEM_PREVIOUS);
+		app_process_user_action (USER_ACTION_SCROLL_UP);
 	else if (button == 5)
-		app_process_user_action (USER_ACTION_GOTO_ITEM_NEXT);
+		app_process_user_action (USER_ACTION_SCROLL_DOWN);
 
 	return true;
 }
@@ -1259,8 +1284,12 @@ g_default_bindings[] =
 	{ "Escape",     USER_ACTION_QUIT               },
 	{ "C-l",        USER_ACTION_REDRAW             },
 
+	{ "Home",       USER_ACTION_GOTO_TOP           },
+	{ "End",        USER_ACTION_GOTO_BOTTOM        },
 	{ "Up",         USER_ACTION_GOTO_ITEM_PREVIOUS },
 	{ "Down",       USER_ACTION_GOTO_ITEM_NEXT     },
+	{ "k",          USER_ACTION_GOTO_ITEM_PREVIOUS },
+	{ "j",          USER_ACTION_GOTO_ITEM_NEXT     },
 	{ "PageUp",     USER_ACTION_GOTO_PAGE_PREVIOUS },
 	{ "PageDown",   USER_ACTION_GOTO_PAGE_NEXT     },
 	{ "C-p",        USER_ACTION_GOTO_ITEM_PREVIOUS },
@@ -1270,9 +1299,11 @@ g_default_bindings[] =
 
 	// Not sure how to set these up, they're pretty arbitrary so far
 	{ "Left",       USER_ACTION_MPD_PREVIOUS       },
+	{ "Right",      USER_ACTION_MPD_NEXT           },
+	{ "h",          USER_ACTION_MPD_PREVIOUS       },
+	{ "l",          USER_ACTION_MPD_NEXT           },
 	{ "Space",      USER_ACTION_MPD_TOGGLE         },
 	{ "C-Space",    USER_ACTION_MPD_STOP           },
-	{ "Right",      USER_ACTION_MPD_NEXT           },
 	{ "M-PageUp",   USER_ACTION_MPD_VOLUME_UP      },
 	{ "M-PageDown", USER_ACTION_MPD_VOLUME_DOWN    },
 	{ NULL,         USER_ACTION_NONE               },
@@ -1304,11 +1335,6 @@ app_process_termo_event (termo_key_t *event)
 		if (!app_goto_tab ((n == 0 ? 10 : n) - 1))
 			beep ();
 		return true;
-	}
-	if (!event->modifiers)
-	{
-		// TODO: normal unmodified keys will have functions as well
-		ucs4_t c = event->code.codepoint;
 	}
 	return true;
 }
@@ -1740,7 +1766,15 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 	if (g_winch_received)
 	{
 		update_curses_terminal_size ();
-		app_process_resize ();
+		app_redraw_top ();
+
+		app_fix_view_range ();
+#if SELECTION_SHOULD_BE_VISIBLE_AFTER_RESIZE
+		// First we had to make the assumptions of this valid
+		app_ensure_selection_visible ();
+#endif
+		app_redraw_view ();
+
 		g_winch_received = false;
 	}
 }
