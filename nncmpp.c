@@ -224,7 +224,8 @@ static struct app_context
 
 	struct config config;               ///< Program configuration
 
-	struct tab *tabs;                   ///< All tabs
+	struct tab *help_tab;               ///< Special help tab
+	struct tab *tabs;                   ///< All other tabs
 	struct tab *active_tab;             ///< Active tab
 
 	// Emulated widgets:
@@ -897,9 +898,10 @@ app_redraw_top (void)
 
 	attrset (APP_ATTR (TAB_BAR));
 	app_next_row (0);
-	// TODO: render this with APP_ATTR (TAB_ACTIVE) when the help tab is selected;
-	//   ...maybe the help tab should not even be on the list?
-	size_t indent = app_write_utf8 (APP_TITLE, 0, -1);
+
+	// The help tab is disguised so that it's not too intruding
+	size_t indent = app_write_utf8 (APP_TITLE,
+		g_ctx.active_tab == g_ctx.help_tab ? APP_ATTR (TAB_ACTIVE) : 0, -1);
 
 	addch (' ');
 	indent++;
@@ -1332,9 +1334,12 @@ app_process_left_mouse_click (int line, int column)
 	{
 		struct tab *winner = NULL;
 		int indent = strlen (APP_TITLE);
-		// TODO: set the winner to the special help tab in this case
 		if (column < indent)
+		{
+			g_ctx.active_tab = g_ctx.help_tab;
+			app_redraw ();
 			return;
+		}
 		for (struct tab *iter = g_ctx.tabs; !winner && iter; iter = iter->next)
 		{
 			if (column < (indent += iter->name_width))
@@ -1795,6 +1800,36 @@ help_tab_create (void)
 	return super;
 }
 
+// --- Info tab ----------------------------------------------------------------
+
+// TODO: either find something else to put in here or remove the wrapper struct
+static struct
+{
+	struct tab super;                   ///< Parent class
+}
+g_info_tab;
+
+static void
+info_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer, int width)
+{
+	(void) self;
+	(void) width;
+
+	// TODO
+}
+
+static struct tab *
+info_tab_create (void)
+{
+	struct tab *super = &g_info_tab.super;
+	tab_init (super, "Info");
+	super->on_item_draw = info_tab_on_item_draw;
+	super->item_count = 0;
+	super->item_selected = 0;
+	return super;
+}
+
 // --- Debug tab ---------------------------------------------------------------
 
 struct debug_item
@@ -2083,21 +2118,20 @@ main (int argc, char *argv[])
 	app_init_terminal ();
 
 	// Redirect all messages from liberty to a special tab so they're not lost
+	struct tab *new_tab;
 	if (g_debug_mode)
 	{
-		struct tab *tab = debug_tab_create ();
-		LIST_PREPEND (g_ctx.tabs, tab);
+		new_tab = debug_tab_create ();
+		LIST_PREPEND (g_ctx.tabs, new_tab);
 	}
 
 	g_log_message_real = app_log_handler;
 
-	// TODO: create more tabs, beware of the list macro
-	{
-		struct tab *tab = help_tab_create ();
-		LIST_PREPEND (g_ctx.tabs, tab);
-	}
+	new_tab = info_tab_create ();
+	LIST_PREPEND (g_ctx.tabs, new_tab);
 
-	g_ctx.active_tab = g_ctx.tabs;
+	g_ctx.help_tab = help_tab_create ();
+	g_ctx.active_tab = g_ctx.help_tab;
 	app_redraw ();
 
 	signals_setup_handlers ();
