@@ -605,6 +605,7 @@ row_buffer_pop_cells (struct row_buffer *self, int space)
 static void
 row_buffer_ellipsis (struct row_buffer *self, int target, chtype attrs)
 {
+	// TODO: get "attrs" from the last eaten item
 	row_buffer_pop_cells (self, self->total_width - target);
 
 	ucs4_t ellipsis = L'…';
@@ -662,31 +663,21 @@ row_buffer_flush (struct row_buffer *self)
 // --- Rendering ---------------------------------------------------------------
 
 /// Write the given UTF-8 string padded with spaces.
-/// @param[in] n  The number of characters to write, or -1 for the whole string.
-/// @param[in] attrs  Text attributes for the text, without padding.
-///                   To change the attributes of all output, use attrset().
-/// @return The number of characters output.
-static size_t
-app_write_utf8 (const char *str, chtype attrs, int n)
+/// @param[in] attrs  Text attributes for the text, including padding.
+static void
+app_write_line (const char *str, chtype attrs)
 {
-	if (!n)
-		return 0;
-
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 	row_buffer_append (&buf, str, attrs);
 
-	if (n < 0)
-		n = buf.total_width;
-	if (buf.total_width > n)
-		row_buffer_ellipsis (&buf, n, attrs);
+	if (buf.total_width > COLS)
+		row_buffer_ellipsis (&buf, COLS, attrs);
 
 	row_buffer_flush (&buf);
-	for (int i = buf.total_width; i < n; i++)
-		addch (' ');
-
+	for (int i = buf.total_width; i < COLS; i++)
+		addch (' ' | attrs);
 	row_buffer_free (&buf);
-	return n;
 }
 
 /// Clear a row in the header to be used and increment the listview offset
@@ -884,40 +875,38 @@ app_redraw_top (void)
 	g_ctx.gauge_offset = -1;
 	g_ctx.gauge_width = 0;
 
-	attrset (0);
 	switch (g_ctx.client.state)
 	{
 	case MPD_CONNECTED:
 		app_redraw_status ();
 		break;
 	case MPD_CONNECTING:
-		attrset (APP_ATTR (HEADER));
-		app_next_row (0);
-		app_write_utf8 ("Connecting to MPD...", APP_ATTR (HEADER), COLS);
+		app_next_row (APP_ATTR (HEADER));
+		app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
 		break;
 	case MPD_DISCONNECTED:
-		attrset (APP_ATTR (HEADER));
-		app_next_row (0);
-		app_write_utf8 ("Disconnected", APP_ATTR (HEADER), COLS);
+		app_next_row (APP_ATTR (HEADER));
+		app_write_line ("Disconnected", APP_ATTR (HEADER));
 	}
 
-	attrset (APP_ATTR (TAB_BAR));
-	app_next_row (0);
+	// XXX: can we get rid of this and still make it look acceptable?
+	chtype a_normal = APP_ATTR (TAB_BAR);
+	chtype a_active = APP_ATTR (TAB_ACTIVE);
+
+	struct row_buffer buf;
+	row_buffer_init (&buf);
 
 	// The help tab is disguised so that it's not too intruding
-	size_t indent = app_write_utf8 (APP_TITLE,
-		g_ctx.active_tab == g_ctx.help_tab ? APP_ATTR (TAB_ACTIVE) : 0, -1);
+	row_buffer_append (&buf, APP_TITLE,
+		g_ctx.active_tab == g_ctx.help_tab ? a_active : a_normal);
+	row_buffer_append (&buf, " ", a_normal);
 
-	addch (' ');
-	indent++;
-
-	attrset (0);
-	LIST_FOR_EACH (struct tab, it, g_ctx.tabs)
+	LIST_FOR_EACH (struct tab, iter, g_ctx.tabs)
 	{
-		indent += app_write_utf8 (it->name,
-			it == g_ctx.active_tab ? APP_ATTR (TAB_ACTIVE) : APP_ATTR (TAB_BAR),
-			MIN (COLS - indent, it->name_width));
+		row_buffer_append (&buf, iter->name,
+			iter == g_ctx.active_tab ? a_active : a_normal);
 	}
+	app_flush_buffer (&buf, a_normal);
 	refresh ();
 }
 
@@ -1015,7 +1004,7 @@ app_redraw_view (void)
 			row_attrs = APP_ATTR (SELECTION);
 
 		attrset (row_attrs);
-		move (g_ctx.top_height + row, 0);
+		mvwhline (stdscr, g_ctx.top_height + row, 0, ' ', COLS);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
@@ -1031,8 +1020,6 @@ app_redraw_view (void)
 			row_buffer_ellipsis (&buf, view_width, row_attrs);
 
 		row_buffer_flush (&buf);
-		for (int i = buf.total_width; i < view_width; i++)
-			addch (' ');
 		row_buffer_free (&buf);
 	}
 	attrset (0);
@@ -2047,7 +2034,8 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 		// TODO: remember the position and attributes and restore them
 		attrset (A_REVERSE);
 		mvwhline (stdscr, LINES - 1, 0, A_REVERSE, COLS);
-		app_write_utf8 (message.str, 0, COLS);
+		app_write_line (message.str, 0);
+		attrset (0);
 	}
 	str_free (&message);
 
