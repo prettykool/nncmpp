@@ -1386,6 +1386,8 @@ g_default_bindings[] =
 
 	{ "Home",       USER_ACTION_GOTO_TOP           },
 	{ "End",        USER_ACTION_GOTO_BOTTOM        },
+	{ "M-<",        USER_ACTION_GOTO_TOP           },
+	{ "M->",        USER_ACTION_GOTO_BOTTOM        },
 	{ "Up",         USER_ACTION_GOTO_ITEM_PREVIOUS },
 	{ "Down",       USER_ACTION_GOTO_ITEM_NEXT     },
 	{ "k",          USER_ACTION_GOTO_ITEM_PREVIOUS },
