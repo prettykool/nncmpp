@@ -1623,12 +1623,14 @@ mpd_on_info_response (const struct mpd_response *response,
 		if (xstrtoul (&tmp, elapsed, 10))
 			g_ctx.song_elapsed = tmp;
 
-		if (g_ctx.state == PLAYER_PLAYING
-		 && xstrtoul (&tmp, period, 10))
+		if (xstrtoul (&tmp, period, 10))
 			msec_past_second = tmp;
 	}
-	poller_timer_set (&g_ctx.elapsed_event, 1000 - msec_past_second);
-	g_ctx.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
+	if (g_ctx.state == PLAYER_PLAYING)
+	{
+		poller_timer_set (&g_ctx.elapsed_event, 1000 - msec_past_second);
+		g_ctx.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
+	}
 
 	// The server sends -1 when nothing is being played right now
 	char *volume = str_map_find (&map, "volume");
