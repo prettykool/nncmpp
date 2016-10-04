@@ -520,8 +520,6 @@ app_is_character_in_locale (ucs4_t ch)
 
 struct row_char
 {
-	LIST_HEADER (struct row_char)
-
 	ucs4_t c;                           ///< Unicode codepoint
 	chtype attrs;                       ///< Special attributes
 	int width;                          ///< How many cells this takes
@@ -530,8 +528,8 @@ struct row_char
 struct row_buffer
 {
 	struct row_char *chars;             ///< Characters
-	struct row_char *chars_tail;        ///< Tail of characters
 	size_t chars_len;                   ///< Character count
+	size_t chars_alloc;                 ///< Characters allocated
 	int total_width;                    ///< Total width of all characters
 };
 
@@ -539,13 +537,13 @@ static void
 row_buffer_init (struct row_buffer *self)
 {
 	memset (self, 0, sizeof *self);
+	self->chars = xcalloc (sizeof *self->chars, (self->chars_alloc = 256));
 }
 
 static void
 row_buffer_free (struct row_buffer *self)
 {
-	LIST_FOR_EACH (struct row_char, it, self->chars)
-		free (it);
+	free (self->chars);
 }
 
 /// Replace invalid chars and push all codepoints to the array w/ attributes.
@@ -555,20 +553,22 @@ row_buffer_append (struct row_buffer *self, const char *str, chtype attrs)
 	// The encoding is only really used internally for some corner cases
 	const char *encoding = locale_charset ();
 
-	ucs4_t c;
-	const uint8_t *start = (const uint8_t *) str, *next = start;
-	while ((next = u8_next (&c, next)))
+	// Note that this function is a hotspot, try to keep it decently fast
+	struct row_char current = { .attrs = attrs };
+	struct row_char invalid = { .attrs = attrs, .c = '?', .width = 1 };
+	const uint8_t *next = (const uint8_t *) str;
+	while ((next = u8_next (&current.c, next)))
 	{
-		if (uc_width (c, encoding) < 0
-		 || !app_is_character_in_locale (c))
-			c = '?';
+		if (self->chars_len >= self->chars_alloc)
+			self->chars = xreallocarray (self->chars,
+				sizeof *self->chars, (self->chars_alloc <<= 1));
 
-		struct row_char *rc = xmalloc (sizeof *rc);
-		*rc = (struct row_char)
-			{ .c = c, .attrs = attrs, .width = uc_width (c, encoding) };
-		LIST_APPEND_WITH_TAIL (self->chars, self->chars_tail, rc);
-		self->chars_len++;
-		self->total_width += rc->width;
+		current.width = uc_width (current.c, encoding);
+		if (current.width < 0 || !app_is_character_in_locale (current.c))
+			current = invalid;
+
+		self->chars[self->chars_len++] = current;
+		self->total_width += current.width;
 	}
 }
 
@@ -596,14 +596,8 @@ static int
 row_buffer_pop_cells (struct row_buffer *self, int space)
 {
 	int made = 0;
-	while (self->chars && made < space)
-	{
-		struct row_char *tail = self->chars_tail;
-		LIST_UNLINK_WITH_TAIL (self->chars, self->chars_tail, tail);
-		self->chars_len--;
-		made += tail->width;
-		free (tail);
-	}
+	while (self->chars_len && made < space)
+		made += self->chars[--self->chars_len].width;
 	self->total_width -= made;
 	return made;
 }
@@ -646,22 +640,23 @@ row_buffer_print (uint32_t *ucs4, chtype attrs)
 static void
 row_buffer_flush (struct row_buffer *self)
 {
-	if (!self->chars)
+	if (!self->chars_len)
 		return;
 
 	// We only NUL-terminate the chunks because of the libunistring API
 	uint32_t chunk[self->chars_len + 1], *insertion_point = chunk;
-	LIST_FOR_EACH (struct row_char, it, self->chars)
+	for (size_t i = 0; i < self->chars_len; i++)
 	{
-		if (it->prev && it->attrs != it->prev->attrs)
+		struct row_char *iter = self->chars + i;
+		if (i && iter[0].attrs != iter[-1].attrs)
 		{
-			row_buffer_print (chunk, it->prev->attrs);
+			row_buffer_print (chunk, iter[-1].attrs);
 			insertion_point = chunk;
 		}
-		*insertion_point++ = it->c;
+		*insertion_point++ = iter->c;
 		*insertion_point = 0;
 	}
-	row_buffer_print (chunk, self->chars_tail->attrs);
+	row_buffer_print (chunk, self->chars[self->chars_len - 1].attrs);
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -1029,8 +1024,8 @@ app_redraw_view (void)
 		if (item_index == tab->item_selected)
 		{
 			// Make it so that the selection color always wins
-			LIST_FOR_EACH (struct row_char, iter, buf.chars)
-				iter->attrs &= ~(A_COLOR | A_REVERSE);
+			for (size_t i = 0; i < buf.chars_len; i++)
+				buf.chars[i].attrs &= ~(A_COLOR | A_REVERSE);
 		}
 		if (buf.total_width > view_width)
 			row_buffer_ellipsis (&buf, view_width, row_attrs);
