@@ -130,6 +130,14 @@ update_curses_terminal_size (void)
 #endif  // HAVE_RESIZETERM && TIOCGWINSZ
 }
 
+static int64_t
+clock_msec (clockid_t clock)
+{
+	struct timespec tp;
+	hard_assert (clock_gettime (clock, &tp) != -1);
+	return (int64_t) tp.tv_sec * 1000 + (int64_t) tp.tv_nsec / 1000000;
+}
+
 // --- Application -------------------------------------------------------------
 
 // Function names are prefixed mostly because of curses which clutters the
@@ -215,6 +223,8 @@ static struct app_context
 	struct str_map song_info;           ///< Current song info
 
 	struct poller_timer elapsed_event;  ///< Seconds elapsed event
+	int64_t elapsed_since;              ///< Time of the next tick
+
 	// TODO: initialize these to -1
 	int song_elapsed;                   ///< Song elapsed in seconds
 	int song_duration;                  ///< Song duration in seconds
@@ -1584,8 +1594,12 @@ mpd_on_info_response (const struct mpd_response *response,
 
 	// Note that we may receive a "time" field twice, however the right one
 	// wins here due to the order we send the commands in
+
+	// The contents of these values overlap and we try to get what we can
+	// FIXME: don't change the values, for fuck's sake
 	char *time     = str_map_find (&map, "time");
 	char *duration = str_map_find (&map, "duration");
+	char *elapsed  = str_map_find (&map, "elapsed");
 	if (time)
 	{
 		char *colon = strchr (time, ':');
@@ -1602,8 +1616,10 @@ mpd_on_info_response (const struct mpd_response *response,
 	if (duration && xstrtoul (&tmp, duration, 10))
 		g_ctx.song_duration = tmp;
 
-	// TODO: use "time" as a fallback (no milliseconds there)
-	char *period, *elapsed = str_map_find (&map, "elapsed");
+	// We could also just poll the server each half a second but let's not
+	int msec_past_second = 0;
+
+	char *period;
 	if (elapsed && (period = strchr (elapsed, '.')))
 	{
 		// For some reason this is much more precise
@@ -1613,12 +1629,12 @@ mpd_on_info_response (const struct mpd_response *response,
 
 		if (g_ctx.state == PLAYER_PLAYING
 		 && xstrtoul (&tmp, period, 10))
-		{
-			// TODO: initialize the timer and create a callback
-			poller_timer_set (&g_ctx.elapsed_event, 1000 - tmp);
-		}
+			msec_past_second = tmp;
 	}
+	poller_timer_set (&g_ctx.elapsed_event, 1000 - msec_past_second);
+	g_ctx.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
 
+	// The server sends -1 when nothing is being played right now
 	char *volume = str_map_find (&map, "volume");
 	if (volume && xstrtoul (&tmp, volume, 10))
 		g_ctx.volume = tmp;
@@ -1631,10 +1647,14 @@ static void
 mpd_on_tick (void *user_data)
 {
 	(void) user_data;
-	// FIXME: this is doomed to drift unless we use POSIX CLOCK_MONOTONIC
-	poller_timer_set (&g_ctx.elapsed_event, 1000);
+	int64_t diff_msec = clock_msec (CLOCK_BEST) - g_ctx.elapsed_since;
+	int elapsed_sec = diff_msec / 1000;
+	int elapsed_msec = diff_msec % 1000;
 
-	g_ctx.song_elapsed++;
+	g_ctx.song_elapsed += elapsed_sec;
+	g_ctx.elapsed_since += elapsed_sec * 1000;
+	poller_timer_set (&g_ctx.elapsed_event, 1000 - elapsed_msec);
+
 	// TODO: try to be more efficient in the redrawing procedures
 	app_redraw ();
 }
@@ -1891,11 +1911,7 @@ debug_tab_push (const char *message, chtype attrs)
 		&g_debug_tab.items[g_debug_tab.super.item_count++];
 	item->text = xstrdup (message);
 	item->attrs = attrs;
-
-	struct timespec tp;
-	hard_assert (clock_gettime (CLOCK_REALTIME, &tp) != -1);
-	item->timestamp = (int64_t) tp.tv_sec * 1000
-		+ (int64_t) tp.tv_nsec / 1000000;
+	item->timestamp = clock_msec (CLOCK_REALTIME);
 
 	app_redraw_view ();
 }
