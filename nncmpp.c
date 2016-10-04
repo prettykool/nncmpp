@@ -220,7 +220,7 @@ static struct app_context
 	struct poller_timer connect_event;  ///< MPD reconnect timer
 
 	enum player_state state;            ///< Player state
-	struct str_map song_info;           ///< Current song info
+	struct str_map playback_info;       ///< Current song info
 
 	struct poller_timer elapsed_event;  ///< Seconds elapsed event
 	int64_t elapsed_since;              ///< Time of the next tick
@@ -479,7 +479,7 @@ static void
 app_free_context (void)
 {
 	mpd_client_free (&g_ctx.client);
-	str_map_free (&g_ctx.song_info);
+	str_map_free (&g_ctx.playback_info);
 
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
@@ -714,7 +714,7 @@ static void
 app_draw_song_info (void)
 {
 	// The map doesn't need to be initialized at all, so we need to check
-	struct str_map *map = &g_ctx.song_info;
+	struct str_map *map = &g_ctx.playback_info;
 	if (!soft_assert (map->len != 0))
 		return;
 
@@ -1078,7 +1078,7 @@ app_fix_view_range (void)
 	return true;
 }
 
-/// Scroll down (positive) or up (negative) @a n items.  Doesn't redraw.
+/// Scroll down (positive) or up (negative) @a n items
 static bool
 app_scroll (int n)
 {
@@ -1119,6 +1119,8 @@ app_move_selection (int diff)
 	app_ensure_selection_visible ();
 	return result;
 }
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
 app_switch_tab (struct tab *tab)
@@ -1486,8 +1488,14 @@ info_tab_on_item_draw (struct tab *self, unsigned item_index,
 	// TODO
 }
 
+static void
+info_tab_update (void)
+{
+	// TODO: add some entries from "playback_info" to the listview
+}
+
 static struct tab *
-info_tab_create (void)
+info_tab_init (void)
 {
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
@@ -1523,7 +1531,7 @@ help_tab_on_item_draw (struct tab *self, unsigned item_index,
 }
 
 static struct tab *
-help_tab_create (void)
+help_tab_init (void)
 {
 	struct tab *super = &g_help_tab.super;
 	tab_init (super, "Help");
@@ -1601,7 +1609,7 @@ debug_tab_push (const char *message, chtype attrs)
 }
 
 static struct tab *
-debug_tab_create (void)
+debug_tab_init (void)
 {
 	g_debug_tab.items = xcalloc
 		((g_debug_tab.items_alloc = 16), sizeof *g_debug_tab.items);
@@ -1620,65 +1628,26 @@ debug_tab_create (void)
 // TODO: this entire thing has been slavishly copy-pasted from dwmstatus
 // TODO: try to move some of this code to mpd.c
 
-// Sometimes it's not that easy and there can be repeating entries
 static void
-mpd_vector_to_map (const struct str_vector *data, struct str_map *map)
+mpd_update_playback_state (void)
 {
-	str_map_init (map);
-	map->key_xfrm = tolower_ascii_strxfrm;
-	map->free = free;
+	struct str_map *map = &g_ctx.playback_info;
 
-	char *key, *value;
-	for (size_t i = 0; i < data->len; i++)
-	{
-		if ((key = mpd_client_parse_kv (data->vector[i], &value)))
-			str_map_set (map, key, xstrdup (value));
-		else
-			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
-	}
-}
-
-static void
-mpd_on_info_response (const struct mpd_response *response,
-	const struct str_vector *data, void *user_data)
-{
-	(void) user_data;
-
-	// TODO: do this also on disconnect
-	g_ctx.song_elapsed = -1;
-	g_ctx.song_duration = -1;
-	g_ctx.volume = -1;
-	str_map_free (&g_ctx.song_info);
-	poller_timer_reset (&g_ctx.elapsed_event);
-
-	if (!response->success)
-	{
-		print_debug ("%s: %s",
-			"retrieving MPD info failed", response->message_text);
-		return;
-	}
-
-	struct str_map map;
-	mpd_vector_to_map (data, &map);
-
-	const char *value;
+	const char *state;
 	g_ctx.state = PLAYER_PLAYING;
-	if ((value = str_map_find (&map, "state")))
+	if ((state = str_map_find (map, "state")))
 	{
-		if (!strcmp (value, "stop"))
+		if (!strcmp (state, "stop"))
 			g_ctx.state = PLAYER_STOPPED;
-		if (!strcmp (value, "pause"))
+		if (!strcmp (state, "pause"))
 			g_ctx.state = PLAYER_PAUSED;
 	}
 
-	// Note that we may receive a "time" field twice, however the right one
-	// wins here due to the order we send the commands in
-
 	// The contents of these values overlap and we try to get what we can
 	// FIXME: don't change the values, for fuck's sake
-	char *time     = str_map_find (&map, "time");
-	char *duration = str_map_find (&map, "duration");
-	char *elapsed  = str_map_find (&map, "elapsed");
+	char *time     = str_map_find (map, "time");
+	char *duration = str_map_find (map, "duration");
+	char *elapsed  = str_map_find (map, "elapsed");
 	if (time)
 	{
 		char *colon = strchr (time, ':');
@@ -1716,11 +1685,61 @@ mpd_on_info_response (const struct mpd_response *response,
 	}
 
 	// The server sends -1 when nothing is being played right now
-	char *volume = str_map_find (&map, "volume");
+	char *volume = str_map_find (map, "volume");
 	if (volume && xstrtoul (&tmp, volume, 10))
 		g_ctx.volume = tmp;
+}
 
-	g_ctx.song_info = map;
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// Sometimes it's not that easy and there can be repeating entries
+static void
+mpd_vector_to_map (const struct str_vector *data, struct str_map *map)
+{
+	str_map_init (map);
+	map->key_xfrm = tolower_ascii_strxfrm;
+	map->free = free;
+
+	char *key, *value;
+	for (size_t i = 0; i < data->len; i++)
+	{
+		if ((key = mpd_client_parse_kv (data->vector[i], &value)))
+			str_map_set (map, key, xstrdup (value));
+		else
+			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+	}
+}
+
+static void
+mpd_on_info_response (const struct mpd_response *response,
+	const struct str_vector *data, void *user_data)
+{
+	(void) user_data;
+
+	// TODO: do this also on disconnect
+	g_ctx.song_elapsed = -1;
+	g_ctx.song_duration = -1;
+	g_ctx.volume = -1;
+	str_map_free (&g_ctx.playback_info);
+	poller_timer_reset (&g_ctx.elapsed_event);
+	// TODO: preset an error player state?
+
+	if (response->success)
+	{
+		// Note that we may receive a "time" field twice, however the right
+		// one wins here due to the order we send the commands in
+		struct str_map map;
+		mpd_vector_to_map (data, &map);
+		g_ctx.playback_info = map;
+	}
+	else
+	{
+		print_debug ("%s: %s",
+			"retrieving MPD info failed", response->message_text);
+	}
+
+	mpd_update_playback_state ();
+	info_tab_update ();
 	app_invalidate ();
 }
 
@@ -2127,16 +2146,16 @@ main (int argc, char *argv[])
 	struct tab *new_tab;
 	if (g_debug_mode)
 	{
-		new_tab = debug_tab_create ();
+		new_tab = debug_tab_init ();
 		LIST_PREPEND (g_ctx.tabs, new_tab);
 	}
 
 	g_log_message_real = app_log_handler;
 
-	new_tab = info_tab_create ();
+	new_tab = info_tab_init ();
 	LIST_PREPEND (g_ctx.tabs, new_tab);
 
-	g_ctx.help_tab = help_tab_create ();
+	g_ctx.help_tab = help_tab_init ();
 	g_ctx.active_tab = g_ctx.help_tab;
 
 	signals_setup_handlers ();
