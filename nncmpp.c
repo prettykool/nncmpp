@@ -1725,7 +1725,9 @@ app_on_reconnect (void *user_data)
 	c->on_failure   = mpd_on_failure;
 	c->on_connected = mpd_on_connected;
 	c->on_event     = mpd_on_events;
-	c->on_io_hook   = mpd_on_io_hook;
+
+	if (g_debug_mode)
+		c->on_io_hook = mpd_on_io_hook;
 
 	// We accept hostname/IPv4/IPv6 in pseudo-URL format, as well as sockets
 	char *address = xstrdup (get_config_string (g_ctx.config.root,
