@@ -240,11 +240,13 @@ static struct app_context
 
 	// Emulated widgets:
 
-	int top_height;                     ///< Height of the top part
+	int header_height;                  ///< Height of the header
 
 	int controls_offset;                ///< Offset to player controls or -1
 	int gauge_offset;                   ///< Offset to the gauge or -1
 	int gauge_width;                    ///< Width of the gauge, if present
+
+	struct poller_idle refresh_event;   ///< Refresh the screen
 
 	// Terminal:
 
@@ -662,6 +664,15 @@ row_buffer_flush (struct row_buffer *self)
 
 // --- Rendering ---------------------------------------------------------------
 
+// TODO: rewrite this so that it's fine-grained but not complicated
+static void
+app_invalidate (void)
+{
+	poller_idle_set (&g_ctx.refresh_event);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 /// Write the given UTF-8 string padded with spaces.
 /// @param[in] attrs  Text attributes for the text, including padding.
 static void
@@ -684,7 +695,7 @@ app_write_line (const char *str, chtype attrs)
 static void
 app_next_row (chtype attrs)
 {
-	mvwhline (stdscr, g_ctx.top_height++, 0, ' ' | attrs, COLS);
+	mvwhline (stdscr, g_ctx.header_height++, 0, ' ' | attrs, COLS);
 }
 
 // We typically write here to a single buffer serving the entire line
@@ -700,7 +711,7 @@ app_flush_buffer (struct row_buffer *buf, chtype attrs)
 }
 
 static void
-app_redraw_song_info (void)
+app_draw_song_info (void)
 {
 	// The map doesn't need to be initialized at all, so we need to check
 	struct str_map *map = &g_ctx.song_info;
@@ -794,10 +805,10 @@ app_write_gauge (struct row_buffer *buf, float ratio, int width)
 }
 
 static void
-app_redraw_status (void)
+app_draw_status (void)
 {
 	if (g_ctx.state != PLAYER_STOPPED)
-		app_redraw_song_info ();
+		app_draw_song_info ();
 
 	// XXX: can we get rid of this and still make it look acceptable?
 	chtype a_normal    = APP_ATTR (HEADER);
@@ -861,15 +872,15 @@ app_redraw_status (void)
 		row_buffer_append (&buf, volume, a_normal);
 		free (volume);
 	}
-	g_ctx.controls_offset = g_ctx.top_height;
+	g_ctx.controls_offset = g_ctx.header_height;
 	app_flush_buffer (&buf, a_normal);
 }
 
 static void
-app_redraw_top (void)
+app_draw_header (void)
 {
-	// TODO: when it changes from the previous value, fix the selection
-	g_ctx.top_height = 0;
+	// TODO: call app_fix_view_range() if it changes from the previous value
+	g_ctx.header_height = 0;
 
 	g_ctx.controls_offset = -1;
 	g_ctx.gauge_offset = -1;
@@ -878,7 +889,7 @@ app_redraw_top (void)
 	switch (g_ctx.client.state)
 	{
 	case MPD_CONNECTED:
-		app_redraw_status ();
+		app_draw_status ();
 		break;
 	case MPD_CONNECTING:
 		app_next_row (APP_ATTR (HEADER));
@@ -907,18 +918,17 @@ app_redraw_top (void)
 			iter == g_ctx.active_tab ? a_active : a_normal);
 	}
 	app_flush_buffer (&buf, a_normal);
-	refresh ();
 }
 
 static int
 app_visible_items (void)
 {
 	// This may eventually include a header bar and/or a status bar
-	return MAX (0, LINES - g_ctx.top_height);
+	return MAX (0, LINES - g_ctx.header_height);
 }
 
 static void
-app_redraw_scrollbar (void)
+app_draw_scrollbar (void)
 {
 	// This assumes that we can write to the one-before-last column,
 	// i.e. that it's not covered by any double-wide character (and that
@@ -939,7 +949,7 @@ app_redraw_scrollbar (void)
 
 		for (int row = 0; row < visible_items; row++)
 		{
-			move (g_ctx.top_height + row, COLS - 1);
+			move (g_ctx.header_height + row, COLS - 1);
 			if (row < start || row > start + length + 1)
 				addch (' ' | APP_ATTR (SCROLLBAR));
 			else
@@ -974,7 +984,7 @@ app_redraw_scrollbar (void)
 		if (row == start) c = partials[start_part];
 		if (row == end)   c = partials[end_part];
 
-		move (g_ctx.top_height + row, COLS - 1);
+		move (g_ctx.header_height + row, COLS - 1);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
@@ -985,16 +995,16 @@ app_redraw_scrollbar (void)
 }
 
 static void
-app_redraw_view (void)
+app_draw_view (void)
 {
-	move (g_ctx.top_height, 0);
+	move (g_ctx.header_height, 0);
 	clrtobot ();
 
 	struct tab *tab = g_ctx.active_tab;
 	bool want_scrollbar = (int) tab->item_count > app_visible_items ();
 	int view_width = COLS - want_scrollbar;
 
-	int to_show = MIN (LINES - g_ctx.top_height,
+	int to_show = MIN (LINES - g_ctx.header_height,
 		(int) tab->item_count - tab->item_top);
 	for (int row = 0; row < to_show; row++)
 	{
@@ -1004,7 +1014,7 @@ app_redraw_view (void)
 			row_attrs = APP_ATTR (SELECTION);
 
 		attrset (row_attrs);
-		mvwhline (stdscr, g_ctx.top_height + row, 0, ' ', COLS);
+		mvwhline (stdscr, g_ctx.header_height + row, 0, ' ', COLS);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
@@ -1025,16 +1035,19 @@ app_redraw_view (void)
 	attrset (0);
 
 	if (want_scrollbar)
-		app_redraw_scrollbar ();
-
-	refresh ();
+		app_draw_scrollbar ();
 }
 
 static void
-app_redraw (void)
+app_on_refresh (void *user_data)
 {
-	app_redraw_top ();
-	app_redraw_view ();
+	(void) user_data;
+	poller_idle_reset (&g_ctx.refresh_event);
+
+	app_draw_header ();
+	app_draw_view ();
+
+	refresh ();
 }
 
 // --- Actions -----------------------------------------------------------------
@@ -1047,6 +1060,7 @@ app_fix_view_range (void)
 	if (tab->item_top < 0)
 	{
 		tab->item_top = 0;
+		app_invalidate ();
 		return false;
 	}
 
@@ -1058,6 +1072,7 @@ app_fix_view_range (void)
 	if (tab->item_top > max_item_top)
 	{
 		tab->item_top = max_item_top;
+		app_invalidate ();
 		return false;
 	}
 	return true;
@@ -1068,6 +1083,7 @@ static bool
 app_scroll (int n)
 {
 	g_ctx.active_tab->item_top += n;
+	app_invalidate ();
 	return app_fix_view_range ();
 }
 
@@ -1098,10 +1114,17 @@ app_move_selection (int diff)
 
 	bool result = tab->item_selected != fixed;
 	tab->item_selected = fixed;
+	app_invalidate ();
 
 	app_ensure_selection_visible ();
-	app_redraw_view ();
 	return result;
+}
+
+static void
+app_switch_tab (struct tab *tab)
+{
+	g_ctx.active_tab = tab;
+	app_invalidate ();
 }
 
 static bool
@@ -1111,8 +1134,7 @@ app_goto_tab (int tab_index)
 	LIST_FOR_EACH (struct tab, iter, g_ctx.tabs)
 		if (i++ == tab_index)
 		{
-			g_ctx.active_tab = iter;
-			app_redraw ();
+			app_switch_tab (iter);
 			return true;
 		}
 	return false;
@@ -1185,7 +1207,7 @@ app_process_user_action (enum user_action action)
 		return false;
 	case USER_ACTION_REDRAW:
 		clear ();
-		app_redraw ();
+		app_invalidate ();
 		return true;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1232,11 +1254,9 @@ app_process_user_action (enum user_action action)
 		// XXX: these should rather be parametrized
 	case USER_ACTION_SCROLL_UP:
 		app_scroll (-3);
-		app_redraw_view ();
 		return true;
 	case USER_ACTION_SCROLL_DOWN:
 		app_scroll (3);
-		app_redraw_view ();
 		return true;
 
 	case USER_ACTION_GOTO_TOP:
@@ -1244,7 +1264,6 @@ app_process_user_action (enum user_action action)
 		{
 			g_ctx.active_tab->item_selected = 0;
 			app_ensure_selection_visible ();
-			app_redraw_view ();
 		}
 		return true;
 	case USER_ACTION_GOTO_BOTTOM:
@@ -1253,7 +1272,6 @@ app_process_user_action (enum user_action action)
 			g_ctx.active_tab->item_selected =
 				(int) g_ctx.active_tab->item_count - 1;
 			app_ensure_selection_visible ();
-			app_redraw_view ();
 		}
 		return true;
 
@@ -1265,12 +1283,12 @@ app_process_user_action (enum user_action action)
 		return true;
 
 	case USER_ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll ((int) g_ctx.top_height - LINES);
-		app_move_selection ((int) g_ctx.top_height - LINES);
+		app_scroll ((int) g_ctx.header_height - LINES);
+		app_move_selection ((int) g_ctx.header_height - LINES);
 		return true;
 	case USER_ACTION_GOTO_PAGE_NEXT:
-		app_scroll (LINES - (int) g_ctx.top_height);
-		app_move_selection (LINES - (int) g_ctx.top_height);
+		app_scroll (LINES - (int) g_ctx.header_height);
+		app_move_selection (LINES - (int) g_ctx.header_height);
 		return true;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1322,14 +1340,13 @@ app_process_left_mouse_click (int line, int column)
 			return;
 		}
 	}
-	else if (line == g_ctx.top_height - 1)
+	else if (line == g_ctx.header_height - 1)
 	{
 		struct tab *winner = NULL;
 		int indent = strlen (APP_TITLE);
 		if (column < indent)
 		{
-			g_ctx.active_tab = g_ctx.help_tab;
-			app_redraw ();
+			app_switch_tab (g_ctx.help_tab);
 			return;
 		}
 		for (struct tab *iter = g_ctx.tabs; !winner && iter; iter = iter->next)
@@ -1338,15 +1355,12 @@ app_process_left_mouse_click (int line, int column)
 				winner = iter;
 		}
 		if (winner)
-		{
-			g_ctx.active_tab = winner;
-			app_redraw ();
-		}
+			app_switch_tab (winner);
 	}
 	else
 	{
 		struct tab *tab = g_ctx.active_tab;
-		int row_index = line - g_ctx.top_height;
+		int row_index = line - g_ctx.header_height;
 		if (row_index < 0
 		 || row_index >= (int) tab->item_count - tab->item_top)
 			return;
@@ -1361,7 +1375,7 @@ app_process_left_mouse_click (int line, int column)
 		}
 		else
 			tab->item_selected = row_index + tab->item_top;
-		app_redraw_view ();
+		app_invalidate ();
 	}
 }
 
@@ -1622,7 +1636,7 @@ mpd_on_info_response (const struct mpd_response *response,
 		g_ctx.volume = tmp;
 
 	g_ctx.song_info = map;
-	app_redraw ();
+	app_invalidate ();
 }
 
 static void
@@ -1637,8 +1651,7 @@ mpd_on_tick (void *user_data)
 	g_ctx.elapsed_since += elapsed_sec * 1000;
 	poller_timer_set (&g_ctx.elapsed_event, 1000 - elapsed_msec);
 
-	// TODO: try to be more efficient in the redrawing procedures
-	app_redraw ();
+	app_invalidate ();
 }
 
 static void
@@ -1895,7 +1908,7 @@ debug_tab_push (const char *message, chtype attrs)
 	item->attrs = attrs;
 	item->timestamp = clock_msec (CLOCK_REALTIME);
 
-	app_redraw_view ();
+	app_invalidate ();
 }
 
 static struct tab *
@@ -1990,14 +2003,8 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 	if (g_winch_received)
 	{
 		update_curses_terminal_size ();
-		app_redraw_top ();
-
 		app_fix_view_range ();
-#if SELECTION_SHOULD_BE_VISIBLE_AFTER_RESIZE
-		// First we had to make the assumptions of this valid
-		app_ensure_selection_visible ();
-#endif
-		app_redraw_view ();
+		app_invalidate ();
 
 		g_winch_received = false;
 	}
@@ -2062,6 +2069,9 @@ app_init_poller_events (void)
 
 	poller_timer_init (&g_ctx.elapsed_event, &g_ctx.poller);
 	g_ctx.elapsed_event.dispatcher = mpd_on_tick;
+
+	poller_idle_init (&g_ctx.refresh_event, &g_ctx.poller);
+	g_ctx.refresh_event.dispatcher = app_on_refresh;
 }
 
 int
@@ -2130,10 +2140,10 @@ main (int argc, char *argv[])
 
 	g_ctx.help_tab = help_tab_create ();
 	g_ctx.active_tab = g_ctx.help_tab;
-	app_redraw ();
 
 	signals_setup_handlers ();
 	app_init_poller_events ();
+	app_invalidate ();
 
 	g_ctx.polling = true;
 	while (g_ctx.polling)
