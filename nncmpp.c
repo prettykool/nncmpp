@@ -1467,69 +1467,152 @@ app_process_termo_event (termo_key_t *event)
 	return true;
 }
 
-// --- Signals -----------------------------------------------------------------
+// --- Info tab ----------------------------------------------------------------
 
-static int g_signal_pipe[2];            ///< A pipe used to signal... signals
-
-/// Program termination has been requested by a signal
-static volatile sig_atomic_t g_termination_requested;
-/// The window has changed in size
-static volatile sig_atomic_t g_winch_received;
+// TODO: either find something else to put in here or remove the wrapper struct
+static struct
+{
+	struct tab super;                   ///< Parent class
+}
+g_info_tab;
 
 static void
-signals_postpone_handling (char id)
+info_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer, int width)
 {
-	int original_errno = errno;
-	if (write (g_signal_pipe[1], &id, 1) == -1)
-		soft_assert (errno == EAGAIN);
-	errno = original_errno;
+	(void) self;
+	(void) width;
+
+	// TODO
+}
+
+static struct tab *
+info_tab_create (void)
+{
+	struct tab *super = &g_info_tab.super;
+	tab_init (super, "Info");
+	super->on_item_draw = info_tab_on_item_draw;
+	super->item_count = 0;
+	super->item_selected = 0;
+	return super;
+}
+
+// --- Help tab ----------------------------------------------------------------
+
+// TODO: either find something else to put in here or remove the wrapper struct
+static struct
+{
+	struct tab super;                   ///< Parent class
+}
+g_help_tab;
+
+static void
+help_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer, int width)
+{
+	(void) self;
+	(void) width;
+
+	// TODO: group them the other way around for clarity
+	hard_assert (item_index < N_ELEMENTS (g_default_bindings));
+	struct binding *binding = &g_default_bindings[item_index];
+	char *text = xstrdup_printf ("%-12s %s",
+		binding->key, g_user_actions[binding->action].description);
+	row_buffer_append (buffer, text, 0);
+	free (text);
+}
+
+static struct tab *
+help_tab_create (void)
+{
+	struct tab *super = &g_help_tab.super;
+	tab_init (super, "Help");
+	super->on_item_draw = help_tab_on_item_draw;
+	super->item_count = N_ELEMENTS (g_default_bindings);
+	super->item_selected = 0;
+	return super;
+}
+
+// --- Debug tab ---------------------------------------------------------------
+
+struct debug_item
+{
+	char *text;                         ///< Logged line
+	int64_t timestamp;                  ///< Timestamp
+	chtype attrs;                       ///< Line attributes
+};
+
+static struct
+{
+	struct tab super;                   ///< Parent class
+	struct debug_item *items;           ///< Items
+	size_t items_alloc;                 ///< How many items are allocated
+	bool active;                        ///< The tab is present
+}
+g_debug_tab;
+
+static void
+debug_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer, int width)
+{
+	(void) self;
+
+	hard_assert (item_index <= g_debug_tab.super.item_count);
+	struct debug_item *item = &g_debug_tab.items[item_index];
+
+	char buf[16];
+	struct tm tm;
+	time_t when = item->timestamp / 1000;
+	strftime (buf, sizeof buf, "%T", localtime_r (&when, &tm));
+
+	char *prefix = xstrdup_printf
+		("%s.%03d", buf, (int) (item->timestamp % 1000));
+	row_buffer_append (buffer, prefix, 0);
+	free (prefix);
+
+	row_buffer_append (buffer, " ", item->attrs);
+	row_buffer_append (buffer, item->text, item->attrs);
+
+	// We override the formatting including colors -- do it for the whole line
+	if (buffer->total_width > width)
+		row_buffer_ellipsis (buffer, width, item->attrs);
+	while (buffer->total_width < width)
+		row_buffer_append (buffer, " ", item->attrs);
 }
 
 static void
-signals_superhandler (int signum)
+debug_tab_push (const char *message, chtype attrs)
 {
-	switch (signum)
+	// TODO: uh... aren't we rather going to write our own abstraction?
+	if (g_debug_tab.items_alloc <= g_debug_tab.super.item_count)
 	{
-	case SIGWINCH:
-		g_winch_received = true;
-		signals_postpone_handling ('w');
-		break;
-	case SIGINT:
-	case SIGTERM:
-		g_termination_requested = true;
-		signals_postpone_handling ('t');
-		break;
-	default:
-		hard_assert (!"unhandled signal");
+		g_debug_tab.items = xreallocarray (g_debug_tab.items,
+			sizeof *g_debug_tab.items, (g_debug_tab.items_alloc <<= 1));
 	}
+
+	// TODO: there should be a better, more efficient mechanism for this
+	struct debug_item *item =
+		&g_debug_tab.items[g_debug_tab.super.item_count++];
+	item->text = xstrdup (message);
+	item->attrs = attrs;
+	item->timestamp = clock_msec (CLOCK_REALTIME);
+
+	app_invalidate ();
 }
 
-static void
-signals_setup_handlers (void)
+static struct tab *
+debug_tab_create (void)
 {
-	if (pipe (g_signal_pipe) == -1)
-		exit_fatal ("%s: %s", "pipe", strerror (errno));
+	g_debug_tab.items = xcalloc
+		((g_debug_tab.items_alloc = 16), sizeof *g_debug_tab.items);
+	g_debug_tab.active = true;
 
-	set_cloexec (g_signal_pipe[0]);
-	set_cloexec (g_signal_pipe[1]);
-
-	// So that the pipe cannot overflow; it would make write() block within
-	// the signal handler, which is something we really don't want to happen.
-	// The same holds true for read().
-	set_blocking (g_signal_pipe[0], false);
-	set_blocking (g_signal_pipe[1], false);
-
-	signal (SIGPIPE, SIG_IGN);
-
-	struct sigaction sa;
-	sa.sa_flags = SA_RESTART;
-	sa.sa_handler = signals_superhandler;
-	sigemptyset (&sa.sa_mask);
-
-	if (sigaction (SIGWINCH, &sa, NULL) == -1
-	 || sigaction (SIGINT,   &sa, NULL) == -1
-	 || sigaction (SIGTERM,  &sa, NULL) == -1)
-		exit_fatal ("sigaction: %s", strerror (errno));
+	struct tab *super = &g_debug_tab.super;
+	tab_init (super, "Debug");
+	super->on_item_draw = debug_tab_on_item_draw;
+	super->item_count = 0;
+	super->item_selected = 0;
+	return super;
 }
 
 // --- MPD interface -----------------------------------------------------------
@@ -1735,7 +1818,25 @@ mpd_on_failure (void *user_data)
 	mpd_queue_reconnect ();
 }
 
-static void mpd_on_io_hook (void *user_data, bool outgoing, const char *line);
+static void
+mpd_on_io_hook (void *user_data, bool outgoing, const char *line)
+{
+	(void) user_data;
+
+	struct str s;
+	str_init (&s);
+	if (outgoing)
+	{
+		str_append_printf (&s, "<< %s", line);
+		debug_tab_push (s.str, APP_ATTR (OUTGOING));
+	}
+	else
+	{
+		str_append_printf (&s, ">> %s", line);
+		debug_tab_push (s.str, APP_ATTR (INCOMING));
+	}
+	str_free (&s);
+}
 
 static void
 app_on_reconnect (void *user_data)
@@ -1780,174 +1881,69 @@ app_on_reconnect (void *user_data)
 	free (address);
 }
 
-// --- Help tab ----------------------------------------------------------------
+// --- Signals -----------------------------------------------------------------
 
-// TODO: either find something else to put in here or remove the wrapper struct
-static struct
-{
-	struct tab super;                   ///< Parent class
-}
-g_help_tab;
+static int g_signal_pipe[2];            ///< A pipe used to signal... signals
 
-static void
-help_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
-{
-	(void) self;
-	(void) width;
-
-	// TODO: group them the other way around for clarity
-	hard_assert (item_index < N_ELEMENTS (g_default_bindings));
-	struct binding *binding = &g_default_bindings[item_index];
-	char *text = xstrdup_printf ("%-12s %s",
-		binding->key, g_user_actions[binding->action].description);
-	row_buffer_append (buffer, text, 0);
-	free (text);
-}
-
-static struct tab *
-help_tab_create (void)
-{
-	struct tab *super = &g_help_tab.super;
-	tab_init (super, "Help");
-	super->on_item_draw = help_tab_on_item_draw;
-	super->item_count = N_ELEMENTS (g_default_bindings);
-	super->item_selected = 0;
-	return super;
-}
-
-// --- Info tab ----------------------------------------------------------------
-
-// TODO: either find something else to put in here or remove the wrapper struct
-static struct
-{
-	struct tab super;                   ///< Parent class
-}
-g_info_tab;
+/// Program termination has been requested by a signal
+static volatile sig_atomic_t g_termination_requested;
+/// The window has changed in size
+static volatile sig_atomic_t g_winch_received;
 
 static void
-info_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
+signals_postpone_handling (char id)
 {
-	(void) self;
-	(void) width;
-
-	// TODO
-}
-
-static struct tab *
-info_tab_create (void)
-{
-	struct tab *super = &g_info_tab.super;
-	tab_init (super, "Info");
-	super->on_item_draw = info_tab_on_item_draw;
-	super->item_count = 0;
-	super->item_selected = 0;
-	return super;
-}
-
-// --- Debug tab ---------------------------------------------------------------
-
-struct debug_item
-{
-	char *text;                         ///< Logged line
-	int64_t timestamp;                  ///< Timestamp
-	chtype attrs;                       ///< Line attributes
-};
-
-static struct
-{
-	struct tab super;                   ///< Parent class
-	struct debug_item *items;           ///< Items
-	size_t items_alloc;                 ///< How many items are allocated
-	bool active;                        ///< The tab is present
-}
-g_debug_tab;
-
-static void
-debug_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
-{
-	(void) self;
-
-	hard_assert (item_index <= g_debug_tab.super.item_count);
-	struct debug_item *item = &g_debug_tab.items[item_index];
-
-	char buf[16];
-	struct tm tm;
-	time_t when = item->timestamp / 1000;
-	strftime (buf, sizeof buf, "%T", localtime_r (&when, &tm));
-
-	char *prefix = xstrdup_printf
-		("%s.%03d", buf, (int) (item->timestamp % 1000));
-	row_buffer_append (buffer, prefix, 0);
-	free (prefix);
-
-	row_buffer_append (buffer, " ", item->attrs);
-	row_buffer_append (buffer, item->text, item->attrs);
-
-	// We override the formatting including colors -- do it for the whole line
-	if (buffer->total_width > width)
-		row_buffer_ellipsis (buffer, width, item->attrs);
-	while (buffer->total_width < width)
-		row_buffer_append (buffer, " ", item->attrs);
+	int original_errno = errno;
+	if (write (g_signal_pipe[1], &id, 1) == -1)
+		soft_assert (errno == EAGAIN);
+	errno = original_errno;
 }
 
 static void
-debug_tab_push (const char *message, chtype attrs)
+signals_superhandler (int signum)
 {
-	// TODO: uh... aren't we rather going to write our own abstraction?
-	if (g_debug_tab.items_alloc <= g_debug_tab.super.item_count)
+	switch (signum)
 	{
-		g_debug_tab.items = xreallocarray (g_debug_tab.items,
-			sizeof *g_debug_tab.items, (g_debug_tab.items_alloc <<= 1));
+	case SIGWINCH:
+		g_winch_received = true;
+		signals_postpone_handling ('w');
+		break;
+	case SIGINT:
+	case SIGTERM:
+		g_termination_requested = true;
+		signals_postpone_handling ('t');
+		break;
+	default:
+		hard_assert (!"unhandled signal");
 	}
-
-	// TODO: there should be a better, more efficient mechanism for this
-	struct debug_item *item =
-		&g_debug_tab.items[g_debug_tab.super.item_count++];
-	item->text = xstrdup (message);
-	item->attrs = attrs;
-	item->timestamp = clock_msec (CLOCK_REALTIME);
-
-	app_invalidate ();
 }
-
-static struct tab *
-debug_tab_create (void)
-{
-	g_debug_tab.items = xcalloc
-		((g_debug_tab.items_alloc = 16), sizeof *g_debug_tab.items);
-	g_debug_tab.active = true;
-
-	struct tab *super = &g_debug_tab.super;
-	tab_init (super, "Debug");
-	super->on_item_draw = debug_tab_on_item_draw;
-	super->item_count = 0;
-	super->item_selected = 0;
-	return super;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
-mpd_on_io_hook (void *user_data, bool outgoing, const char *line)
+signals_setup_handlers (void)
 {
-	(void) user_data;
+	if (pipe (g_signal_pipe) == -1)
+		exit_fatal ("%s: %s", "pipe", strerror (errno));
 
-	struct str s;
-	str_init (&s);
-	if (outgoing)
-	{
-		str_append_printf (&s, "<< %s", line);
-		debug_tab_push (s.str, APP_ATTR (OUTGOING));
-	}
-	else
-	{
-		str_append_printf (&s, ">> %s", line);
-		debug_tab_push (s.str, APP_ATTR (INCOMING));
-	}
-	str_free (&s);
+	set_cloexec (g_signal_pipe[0]);
+	set_cloexec (g_signal_pipe[1]);
+
+	// So that the pipe cannot overflow; it would make write() block within
+	// the signal handler, which is something we really don't want to happen.
+	// The same holds true for read().
+	set_blocking (g_signal_pipe[0], false);
+	set_blocking (g_signal_pipe[1], false);
+
+	signal (SIGPIPE, SIG_IGN);
+
+	struct sigaction sa;
+	sa.sa_flags = SA_RESTART;
+	sa.sa_handler = signals_superhandler;
+	sigemptyset (&sa.sa_mask);
+
+	if (sigaction (SIGWINCH, &sa, NULL) == -1
+	 || sigaction (SIGINT,   &sa, NULL) == -1
+	 || sigaction (SIGTERM,  &sa, NULL) == -1)
+		exit_fatal ("sigaction: %s", strerror (errno));
 }
 
 // --- Initialisation, event handling ------------------------------------------
