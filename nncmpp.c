@@ -1442,8 +1442,7 @@ app_process_termo_event (termo_key_t *event)
 	{
 		struct binding *binding = &g_default_bindings[i];
 		termo_key_t key;
-		// FIXME: I've made termo parse it as a multibyte string, I want UTF-8
-		hard_assert (!*termo_strpkey (g_ctx.tk, binding->key, &key,
+		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk, binding->key, &key,
 			TERMO_FORMAT_ALTISMETA));
 		if (!termo_keycmp (g_ctx.tk, event, &key))
 			return app_process_user_action (binding->action);
