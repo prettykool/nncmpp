@@ -1126,31 +1126,47 @@ app_goto_tab (int tab_index)
 
 // --- User input handling -----------------------------------------------------
 
+#define USER_ACTIONS(XX) \
+	XX( NONE,               "Do nothing"              ) \
+	\
+	XX( QUIT,               "Quit application"        ) \
+	XX( REDRAW,             "Redraw screen"           ) \
+	\
+	XX( MPD_PREVIOUS,       "Previous song"           ) \
+	XX( MPD_TOGGLE,         "Toggle play/pause"       ) \
+	XX( MPD_STOP,           "Stop playback"           ) \
+	XX( MPD_NEXT,           "Next song"               ) \
+	XX( MPD_VOLUME_UP,      "Increase volume"         ) \
+	XX( MPD_VOLUME_DOWN,    "Decrease volume"         ) \
+	\
+	XX( SCROLL_UP,          "Scroll up"               ) \
+	XX( SCROLL_DOWN,        "Scroll down"             ) \
+	\
+	XX( GOTO_TOP,           "Go to the top"           ) \
+	XX( GOTO_BOTTOM,        "Go to the bottom"        ) \
+	XX( GOTO_ITEM_PREVIOUS, "Go to the previous item" ) \
+	XX( GOTO_ITEM_NEXT,     "Go to the next item"     ) \
+	XX( GOTO_PAGE_PREVIOUS, "Go to the previous page" ) \
+	XX( GOTO_PAGE_NEXT,     "Go to the next page"     )
+
 enum user_action
 {
-	USER_ACTION_NONE,
-
-	USER_ACTION_QUIT,
-	USER_ACTION_REDRAW,
-
-	USER_ACTION_MPD_PREVIOUS,
-	USER_ACTION_MPD_TOGGLE,
-	USER_ACTION_MPD_STOP,
-	USER_ACTION_MPD_NEXT,
-	USER_ACTION_MPD_VOLUME_UP,
-	USER_ACTION_MPD_VOLUME_DOWN,
-
-	USER_ACTION_SCROLL_UP,
-	USER_ACTION_SCROLL_DOWN,
-
-	USER_ACTION_GOTO_TOP,
-	USER_ACTION_GOTO_BOTTOM,
-	USER_ACTION_GOTO_ITEM_PREVIOUS,
-	USER_ACTION_GOTO_ITEM_NEXT,
-	USER_ACTION_GOTO_PAGE_PREVIOUS,
-	USER_ACTION_GOTO_PAGE_NEXT,
-
+#define XX(name, description) USER_ACTION_ ## name,
+	USER_ACTIONS (XX)
+#undef XX
 	USER_ACTION_COUNT
+};
+
+static struct user_action_info
+{
+	const char *name;                   ///< Name for user bindings
+	const char *description;            ///< Human-readable description
+}
+g_user_actions[] =
+{
+#define XX(name, description) { #name, description },
+	USER_ACTIONS (XX)
+#undef XX
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1408,7 +1424,6 @@ g_default_bindings[] =
 	{ "C-Space",    USER_ACTION_MPD_STOP           },
 	{ "M-PageUp",   USER_ACTION_MPD_VOLUME_UP      },
 	{ "M-PageDown", USER_ACTION_MPD_VOLUME_DOWN    },
-	{ NULL,         USER_ACTION_NONE               },
 };
 
 static bool
@@ -1418,14 +1433,15 @@ app_process_termo_event (termo_key_t *event)
 		return app_process_mouse (event);
 
 	// TODO: pre-parse the keys, order them by termo_keycmp() and binary search
-	for (struct binding *iter = g_default_bindings; iter->key; iter++)
+	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
 	{
+		struct binding *binding = &g_default_bindings[i];
 		termo_key_t key;
 		// FIXME: I've made termo parse it as a multibyte string, I want UTF-8
-		hard_assert (!*termo_strpkey (g_ctx.tk, iter->key, &key,
+		hard_assert (!*termo_strpkey (g_ctx.tk, binding->key, &key,
 			TERMO_FORMAT_ALTISMETA));
 		if (!termo_keycmp (g_ctx.tk, event, &key))
-			return app_process_user_action (iter->action);
+			return app_process_user_action (binding->action);
 	}
 
 	// TODO: parametrize actions, put this among other bindings
@@ -1750,17 +1766,6 @@ static struct
 }
 g_help_tab;
 
-static struct help_tab_item
-{
-	const char *text;                   ///< Item text
-}
-g_help_items[] =
-{
-	{ "First entry on the list" },
-	{ "Something different" },
-	{ "Yet another item" },
-};
-
 static void
 help_tab_on_item_draw (struct tab *self, unsigned item_index,
 	struct row_buffer *buffer, int width)
@@ -1768,8 +1773,13 @@ help_tab_on_item_draw (struct tab *self, unsigned item_index,
 	(void) self;
 	(void) width;
 
-	hard_assert (item_index <= N_ELEMENTS (g_help_items));
-	row_buffer_append (buffer, g_help_items[item_index].text, 0);
+	// TODO: group them the other way around for clarity
+	hard_assert (item_index < N_ELEMENTS (g_default_bindings));
+	struct binding *binding = &g_default_bindings[item_index];
+	char *text = xstrdup_printf ("%-12s %s",
+		binding->key, g_user_actions[binding->action].description);
+	row_buffer_append (buffer, text, 0);
+	free (text);
 }
 
 static struct tab *
@@ -1778,7 +1788,7 @@ help_tab_create (void)
 	struct tab *super = &g_help_tab.super;
 	tab_init (super, "Help");
 	super->on_item_draw = help_tab_on_item_draw;
-	super->item_count = N_ELEMENTS (g_help_items);
+	super->item_count = N_ELEMENTS (g_default_bindings);
 	super->item_selected = 0;
 	return super;
 }
