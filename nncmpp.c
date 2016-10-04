@@ -752,7 +752,7 @@ static void
 app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
 {
 	int minutes = seconds / 60; seconds %= 60;
-	int hours   = minutes / 60; hours   %= 60;
+	int hours   = minutes / 60; minutes %= 60;
 
 	struct str s;
 	str_init (&s);
