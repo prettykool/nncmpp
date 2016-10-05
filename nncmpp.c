@@ -156,13 +156,14 @@ clock_msec (clockid_t clock)
 
 struct tab;
 struct row_buffer;
+enum user_action;
 
-/// Try to handle an event in the tab
-typedef bool (*tab_event_fn) (struct tab *self, termo_key_t *event);
+/// Try to handle an action in the tab
+typedef bool (*tab_action_fn) (enum user_action action);
 
 /// Draw an item to the screen using the row buffer API
-typedef void (*tab_item_draw_fn) (struct tab *self,
-	unsigned item_index, struct row_buffer *buffer, int width);
+typedef void (*tab_item_draw_fn)
+	(size_t item_index, struct row_buffer *buffer, int width);
 
 struct tab
 {
@@ -174,7 +175,7 @@ struct tab
 	// Implementation:
 
 	// TODO: free() callback?
-	tab_event_fn on_event;              ///< Event handler callback
+	tab_action_fn on_action;            ///< User action handler callback
 	tab_item_draw_fn on_item_draw;      ///< Item draw callback
 
 	// Provided by tab owner:
@@ -1056,7 +1057,7 @@ app_draw_view (void)
 		struct row_buffer buf;
 		row_buffer_init (&buf);
 
-		tab->on_item_draw (tab, item_index, &buf, view_width);
+		tab->on_item_draw (item_index, &buf, view_width);
 		if (item_index == tab->item_selected)
 		{
 			// Make it so that the selection color always wins
@@ -1238,8 +1239,12 @@ g_user_actions[] =
 static bool
 app_process_user_action (enum user_action action)
 {
-	struct mpd_client *c = &g_ctx.client;
+	// First let the tab try to handle this
 	struct tab *tab = g_ctx.active_tab;
+	if (tab->on_action && tab->on_action (action))
+		return true;
+
+	struct mpd_client *c = &g_ctx.client;
 	switch (action)
 	{
 	case USER_ACTION_QUIT:
@@ -1337,7 +1342,8 @@ app_process_user_action (enum user_action action)
 	case USER_ACTION_NONE:
 		return true;
 	default:
-		hard_assert (!"unhandled user action");
+		beep ();
+		return true;
 	}
 	return true;
 }
@@ -1513,12 +1519,10 @@ app_process_termo_event (termo_key_t *event)
 // TODO: play stream on Enter (just send a command, presumably)
 
 static void
-streams_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
+streams_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
+	int width)
 {
-	(void) self;
 	(void) width;
-
 	row_buffer_append (buffer, g_ctx.streams.vector[item_index], 0);
 }
 
@@ -1543,10 +1547,8 @@ static struct
 g_info_tab;
 
 static void
-info_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
+info_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 {
-	(void) self;
 	(void) width;
 
 	// It looks like we could do with a generic list structure that just
@@ -1600,25 +1602,14 @@ info_tab_init (void)
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
 	super->on_item_draw = info_tab_on_item_draw;
-	super->item_count = 0;
-	super->item_selected = 0;
 	return super;
 }
 
 // --- Help tab ----------------------------------------------------------------
 
-// TODO: either find something else to put in here or remove the wrapper struct
-static struct
-{
-	struct tab super;                   ///< Parent class
-}
-g_help_tab;
-
 static void
-help_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
+help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 {
-	(void) self;
 	(void) width;
 
 	// TODO: group them the other way around for clarity
@@ -1633,12 +1624,11 @@ help_tab_on_item_draw (struct tab *self, unsigned item_index,
 static struct tab *
 help_tab_init (void)
 {
-	struct tab *super = &g_help_tab.super;
-	tab_init (super, "Help");
-	super->on_item_draw = help_tab_on_item_draw;
-	super->item_count = N_ELEMENTS (g_default_bindings);
-	super->item_selected = 0;
-	return super;
+	static struct tab super;
+	tab_init (&super, "Help");
+	super.on_item_draw = help_tab_on_item_draw;
+	super.item_count = N_ELEMENTS (g_default_bindings);
+	return &super;
 }
 
 // --- Debug tab ---------------------------------------------------------------
@@ -1660,11 +1650,8 @@ static struct
 g_debug_tab;
 
 static void
-debug_tab_on_item_draw (struct tab *self, unsigned item_index,
-	struct row_buffer *buffer, int width)
+debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 {
-	(void) self;
-
 	hard_assert (item_index <= g_debug_tab.super.item_count);
 	struct debug_item *item = &g_debug_tab.items[item_index];
 
@@ -1718,8 +1705,6 @@ debug_tab_init (void)
 	struct tab *super = &g_debug_tab.super;
 	tab_init (super, "Debug");
 	super->on_item_draw = debug_tab_on_item_draw;
-	super->item_count = 0;
-	super->item_selected = 0;
 	return super;
 }
 
