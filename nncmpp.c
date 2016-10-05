@@ -1266,6 +1266,7 @@ app_process_user_action (enum user_action action)
 		{
 			g_ctx.active_tab->item_selected = 0;
 			app_ensure_selection_visible ();
+			app_invalidate ();
 		}
 		return true;
 	case USER_ACTION_GOTO_BOTTOM:
@@ -1274,6 +1275,7 @@ app_process_user_action (enum user_action action)
 			g_ctx.active_tab->item_selected =
 				(int) g_ctx.active_tab->item_count - 1;
 			app_ensure_selection_visible ();
+			app_invalidate ();
 		}
 		return true;
 
