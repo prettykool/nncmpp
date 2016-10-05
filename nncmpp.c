@@ -233,6 +233,7 @@ static struct app_context
 	// Data:
 
 	struct config config;               ///< Program configuration
+	struct str_vector streams;          ///< List of "name NUL URI NUL"
 
 	struct tab *help_tab;               ///< Special help tab
 	struct tab *tabs;                   ///< All other tabs
@@ -379,12 +380,46 @@ load_config_colors (struct config_item *subtree, void *user_data)
 #undef XX
 }
 
+static int
+str_vector_sort_utf8_cb (const void *a, const void *b)
+{
+	return u8_strcmp (*(const uint8_t **) a, *(const uint8_t **) b);
+}
+
+static void
+load_config_streams (struct config_item *subtree, void *user_data)
+{
+	(void) user_data;
+
+	// XXX: we can't use the tab in load_config_streams() because it hasn't
+	//   been initialized yet, and we cannot initialize it before the
+	//   configuration has been loaded.  Thus we load it into the app_context.
+	struct str_map_iter iter;
+	str_map_iter_init (&iter, &subtree->value.object);
+	struct config_item *item;
+	while ((item = str_map_iter_next (&iter)))
+		if (!config_item_type_is_string (item->type))
+			print_warning ("`%s': stream URIs must be strings", iter.link->key);
+		else
+		{
+			struct str s;
+			str_init (&s);
+			str_append (&s, iter.link->key);
+			str_append_c (&s, '\0');
+			str_append_str (&s, &item->value.string);
+			str_vector_add_owned (&g_ctx.streams, str_steal (&s));
+		}
+	qsort (g_ctx.streams.vector, g_ctx.streams.len,
+		sizeof *g_ctx.streams.vector, str_vector_sort_utf8_cb);
+}
+
 static void
 app_load_configuration (void)
 {
 	struct config *config = &g_ctx.config;
 	config_register_module (config, "settings", load_config_settings, NULL);
 	config_register_module (config, "colors",   load_config_colors,   NULL);
+	config_register_module (config, "streams",  load_config_streams,  NULL);
 
 	char *filename = resolve_filename
 		(PROGRAM_NAME ".conf", resolve_relative_config_filename);
@@ -429,6 +464,7 @@ app_init_context (void)
 	poller_init (&g_ctx.poller);
 	mpd_client_init (&g_ctx.client, &g_ctx.poller);
 	config_init (&g_ctx.config);
+	str_vector_init (&g_ctx.streams);
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
@@ -480,6 +516,7 @@ app_free_context (void)
 {
 	mpd_client_free (&g_ctx.client);
 	str_map_free (&g_ctx.playback_info);
+	str_vector_free (&g_ctx.streams);
 
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
@@ -1471,6 +1508,30 @@ app_process_termo_event (termo_key_t *event)
 	return true;
 }
 
+// --- Streams -----------------------------------------------------------------
+
+// TODO: play stream on Enter (just send a command, presumably)
+
+static void
+streams_tab_on_item_draw (struct tab *self, unsigned item_index,
+	struct row_buffer *buffer, int width)
+{
+	(void) self;
+	(void) width;
+
+	row_buffer_append (buffer, g_ctx.streams.vector[item_index], 0);
+}
+
+static struct tab *
+streams_tab_init (void)
+{
+	static struct tab super;
+	tab_init (&super, "Streams");
+	super.on_item_draw = streams_tab_on_item_draw;
+	super.item_count = g_ctx.streams.len;
+	return &super;
+}
+
 // --- Info tab ----------------------------------------------------------------
 
 static struct
@@ -2193,6 +2254,12 @@ main (int argc, char *argv[])
 
 	new_tab = info_tab_init ();
 	LIST_PREPEND (g_ctx.tabs, new_tab);
+
+	if (g_ctx.streams.len)
+	{
+		new_tab = streams_tab_init ();
+		LIST_PREPEND (g_ctx.tabs, new_tab);
+	}
 
 	g_ctx.help_tab = help_tab_init ();
 	g_ctx.active_tab = g_ctx.help_tab;
