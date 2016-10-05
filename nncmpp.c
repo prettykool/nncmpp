@@ -1473,10 +1473,11 @@ app_process_termo_event (termo_key_t *event)
 
 // --- Info tab ----------------------------------------------------------------
 
-// TODO: either find something else to put in here or remove the wrapper struct
 static struct
 {
 	struct tab super;                   ///< Parent class
+	struct str_vector keys;             ///< Data keys
+	struct str_vector values;           ///< Data values
 }
 g_info_tab;
 
@@ -1487,18 +1488,54 @@ info_tab_on_item_draw (struct tab *self, unsigned item_index,
 	(void) self;
 	(void) width;
 
-	// TODO
+	// It looks like we could do with a generic list structure that just
+	// stores formatted row_buffers.  Let's see for other tabs:
+	//  - Current -- unusable, has dynamic column alignment
+	//  - Library -- could work for the "icons"
+	//  - Streams -- useless
+	//  - Debug   -- it'd take up considerably more space
+	// However so far we're only showing show key-value pairs.
+
+	row_buffer_addv (buffer,
+		g_info_tab.keys.vector[item_index], A_BOLD, ":", A_BOLD, NULL);
+	while (buffer->total_width < 8)
+		row_buffer_append (buffer, " ", 0);
+	row_buffer_append (buffer, g_info_tab.values.vector[item_index], 0);
+}
+
+static void
+info_tab_add (struct str_map *map, const char *field)
+{
+	const char *value = str_map_find (map, field);
+	if (!value) value = "";
+
+	str_vector_add (&g_info_tab.keys, field);
+	str_vector_add (&g_info_tab.values, value);
+	g_info_tab.super.item_count++;
 }
 
 static void
 info_tab_update (void)
 {
-	// TODO: add some entries from "playback_info" to the listview
+	str_vector_reset (&g_info_tab.keys);
+	str_vector_reset (&g_info_tab.values);
+	g_info_tab.super.item_count = 0;
+
+	struct str_map *map = &g_ctx.playback_info;
+	info_tab_add (map, "Title");
+	info_tab_add (map, "Artist");
+	info_tab_add (map, "Album");
+	info_tab_add (map, "Track");
+	info_tab_add (map, "Genre");
+	info_tab_add (map, "File");
 }
 
 static struct tab *
 info_tab_init (void)
 {
+	str_vector_init (&g_info_tab.keys);
+	str_vector_init (&g_info_tab.values);
+
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
 	super->on_item_draw = info_tab_on_item_draw;
