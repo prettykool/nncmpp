@@ -1195,6 +1195,11 @@ app_goto_tab (int tab_index)
 	XX( MPD_VOLUME_UP,      "Increase volume"         ) \
 	XX( MPD_VOLUME_DOWN,    "Decrease volume"         ) \
 	\
+	XX( MPD_ADD,         "Add song to playlist"       ) \
+	XX( MPD_REPLACE,     "Replace playlist with song" ) \
+	\
+	XX( CHOOSE,             "Choose item"             ) \
+	\
 	XX( SCROLL_UP,          "Scroll up"               ) \
 	XX( SCROLL_DOWN,        "Scroll down"             ) \
 	\
@@ -1474,6 +1479,10 @@ g_default_bindings[] =
 	{ "C-f",        USER_ACTION_GOTO_PAGE_NEXT     },
 
 	// Not sure how to set these up, they're pretty arbitrary so far
+	{ "Enter",      USER_ACTION_CHOOSE             },
+	{ "a",          USER_ACTION_MPD_ADD            },
+	{ "r",          USER_ACTION_MPD_REPLACE        },
+
 	{ "Left",       USER_ACTION_MPD_PREVIOUS       },
 	{ "Right",      USER_ACTION_MPD_NEXT           },
 	{ "h",          USER_ACTION_MPD_PREVIOUS       },
