@@ -671,12 +671,13 @@ row_buffer_ellipsis (struct row_buffer *self, int target, chtype attrs)
 static void
 row_buffer_print (uint32_t *ucs4, chtype attrs)
 {
-	// Cannot afford to convert negative numbers to the unsigned chtype.
-	uint8_t *str = (uint8_t *) u32_strconv_to_locale (ucs4);
+	// This assumes that we can reset the attribute set without consequences
+	char *str = u32_strconv_to_locale (ucs4);
 	if (str)
 	{
-		for (uint8_t *p = str; *p; p++)
-			addch (*p | attrs);
+		attrset (attrs);
+		addstr (str);
+		attrset (0);
 		free (str);
 	}
 }
@@ -1054,26 +1055,29 @@ app_draw_view (void)
 		if (item_index == tab->item_selected)
 			row_attrs = APP_ATTR (SELECTION);
 
-		attrset (row_attrs);
-		mvwhline (stdscr, g_ctx.header_height + row, 0, ' ', COLS);
-
 		struct row_buffer buf;
 		row_buffer_init (&buf);
-
 		tab->on_item_draw (item_index, &buf, view_width);
-		if (item_index == tab->item_selected)
+
+		// Combine attributes used by the handler with the defaults.
+		// Avoiding attrset() because of row_buffer_flush().
+		for (size_t i = 0; i < buf.chars_len; i++)
 		{
-			// Make it so that the selection color always wins
-			for (size_t i = 0; i < buf.chars_len; i++)
-				buf.chars[i].attrs &= ~(A_COLOR | A_REVERSE);
+			chtype *attrs = &buf.chars[i].attrs;
+			if (item_index == tab->item_selected)
+				*attrs = (*attrs & ~(A_COLOR | A_REVERSE)) | row_attrs;
+			else if ((*attrs & A_COLOR) && (row_attrs & A_COLOR))
+				*attrs |= (row_attrs & ~A_COLOR);
+			else
+				*attrs |=  row_attrs;
 		}
 		if (buf.total_width > view_width)
 			row_buffer_ellipsis (&buf, view_width, row_attrs);
 
+		mvwhline (stdscr, g_ctx.header_height + row, 0, ' ' | row_attrs, COLS);
 		row_buffer_flush (&buf);
 		row_buffer_free (&buf);
 	}
-	attrset (0);
 
 	if (want_scrollbar)
 		app_draw_scrollbar ();
@@ -2152,11 +2156,9 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	}
 	else
 	{
-		// TODO: remember the position and attributes and restore them
-		attrset (A_REVERSE);
+		// TODO: remember the position and restore it
 		mvwhline (stdscr, LINES - 1, 0, A_REVERSE, COLS);
-		app_write_line (message.str, 0);
-		attrset (0);
+		app_write_line (message.str, A_REVERSE);
 	}
 	str_free (&message);
 
