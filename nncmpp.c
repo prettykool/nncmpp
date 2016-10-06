@@ -663,6 +663,9 @@ row_buffer_space (struct row_buffer *self, int width, chtype attrs)
 static void
 row_buffer_ellipsis (struct row_buffer *self, int target, chtype attrs)
 {
+	if (self->total_width <= target)
+		return;
+
 	// TODO: get "attrs" from the last eaten item
 	row_buffer_pop_cells (self, self->total_width - target);
 
@@ -738,11 +741,8 @@ app_write_line (const char *str, chtype attrs)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 	row_buffer_append (&buf, str, attrs);
-
-	if (buf.total_width > COLS)
-		row_buffer_ellipsis (&buf, COLS, attrs);
+	row_buffer_ellipsis (&buf, COLS, attrs);
 	row_buffer_space (&buf, COLS - buf.total_width, attrs);
-
 	row_buffer_flush (&buf);
 	row_buffer_free (&buf);
 }
@@ -758,10 +758,8 @@ app_next_row (chtype attrs)
 static void
 app_flush_buffer (struct row_buffer *buf, chtype attrs)
 {
-	if (buf->total_width > COLS)
-		row_buffer_ellipsis (buf, COLS, attrs);
-
 	app_next_row (attrs);
+	row_buffer_ellipsis (buf, COLS, attrs);
 	row_buffer_flush (buf);
 	row_buffer_free (buf);
 }
@@ -1083,10 +1081,9 @@ app_draw_view (void)
 			else
 				*attrs |=  row_attrs;
 		}
-		if (buf.total_width > view_width)
-			row_buffer_ellipsis (&buf, view_width, row_attrs);
 
 		mvwhline (stdscr, g_ctx.header_height + row, 0, ' ' | row_attrs, COLS);
+		row_buffer_ellipsis (&buf, view_width, row_attrs);
 		row_buffer_flush (&buf);
 		row_buffer_free (&buf);
 	}
@@ -1696,8 +1693,7 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	row_buffer_append (buffer, item->text, item->attrs);
 
 	// We override the formatting including colors -- do it for the whole line
-	if (buffer->total_width > width)
-		row_buffer_ellipsis (buffer, width, item->attrs);
+	row_buffer_ellipsis (buffer, width, item->attrs);
 	row_buffer_space (buffer, width - buffer->total_width, item->attrs);
 }
 
