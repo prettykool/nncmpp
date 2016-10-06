@@ -1106,7 +1106,7 @@ app_on_refresh (void *user_data)
 
 // --- Actions -----------------------------------------------------------------
 
-/// Checks what items that are visible and returns if fixes were needed
+/// Checks what items are visible and returns if fixes were needed
 static bool
 app_fix_view_range (void)
 {
@@ -1269,28 +1269,29 @@ app_process_user_action (enum user_action action)
 	switch (action)
 	{
 	case USER_ACTION_QUIT:
-		return false;
+		app_quit ();
+		break;
 	case USER_ACTION_REDRAW:
 		clear ();
 		app_invalidate ();
-		return true;
+		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	case USER_ACTION_MPD_PREVIOUS:
 		MPD_SIMPLE ("previous")
-		return true;
+		break;
 	case USER_ACTION_MPD_TOGGLE:
 		if      (g_ctx.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1")
 		else if (g_ctx.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0")
 		else                                    MPD_SIMPLE ("play")
-		return true;
+		break;
 	case USER_ACTION_MPD_STOP:
 		MPD_SIMPLE ("stop")
-		return true;
+		break;
 	case USER_ACTION_MPD_NEXT:
 		MPD_SIMPLE ("next")
-		return true;
+		break;
 	case USER_ACTION_MPD_VOLUME_UP:
 		if (g_ctx.volume >= 0)
 		{
@@ -1298,7 +1299,7 @@ app_process_user_action (enum user_action action)
 			MPD_SIMPLE ("setvol", volume)
 			free (volume);
 		}
-		return true;
+		break;
 	case USER_ACTION_MPD_VOLUME_DOWN:
 		if (g_ctx.volume >= 0)
 		{
@@ -1306,7 +1307,7 @@ app_process_user_action (enum user_action action)
 			MPD_SIMPLE ("setvol", volume)
 			free (volume);
 		}
-		return true;
+		break;
 
 	// TODO: relative seeks
 #if 0
@@ -1319,10 +1320,10 @@ app_process_user_action (enum user_action action)
 		// XXX: these should rather be parametrized
 	case USER_ACTION_SCROLL_UP:
 		app_scroll (-3);
-		return true;
+		break;
 	case USER_ACTION_SCROLL_DOWN:
 		app_scroll (3);
-		return true;
+		break;
 
 	case USER_ACTION_GOTO_TOP:
 		if (tab->item_count)
@@ -1331,7 +1332,7 @@ app_process_user_action (enum user_action action)
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
-		return true;
+		break;
 	case USER_ACTION_GOTO_BOTTOM:
 		if (tab->item_count)
 		{
@@ -1340,38 +1341,38 @@ app_process_user_action (enum user_action action)
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
-		return true;
+		break;
 
 	case USER_ACTION_GOTO_ITEM_PREVIOUS:
 		app_move_selection (-1);
-		return true;
+		break;
 	case USER_ACTION_GOTO_ITEM_NEXT:
 		app_move_selection (1);
-		return true;
+		break;
 
 	case USER_ACTION_GOTO_PAGE_PREVIOUS:
 		app_scroll ((int) g_ctx.header_height - LINES);
 		app_move_selection ((int) g_ctx.header_height - LINES);
-		return true;
+		break;
 	case USER_ACTION_GOTO_PAGE_NEXT:
 		app_scroll (LINES - (int) g_ctx.header_height);
 		app_move_selection (LINES - (int) g_ctx.header_height);
-		return true;
+		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	case USER_ACTION_NONE:
-		return true;
+		break;
 	default:
 		beep ();
-		return true;
+		return false;
 	}
 	return true;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-static void
+static bool
 app_process_left_mouse_click (int line, int column)
 {
 	if (line == g_ctx.controls_offset)
@@ -1383,29 +1384,25 @@ app_process_left_mouse_click (int line, int column)
 		if (column >= 3 && column <=  4) action = USER_ACTION_MPD_TOGGLE;
 		if (column >= 6 && column <=  7) action = USER_ACTION_MPD_STOP;
 		if (column >= 9 && column <= 10) action = USER_ACTION_MPD_NEXT;
+
 		if (action)
-		{
-			app_process_user_action (action);
-			return;
-		}
+			return app_process_user_action (action);
 
 		int gauge_offset = column - g_ctx.gauge_offset;
-		if (g_ctx.gauge_offset >= 0
-		 && gauge_offset >= 0 && gauge_offset < g_ctx.gauge_width)
-		{
-			float position = (float) gauge_offset / g_ctx.gauge_width;
-			struct mpd_client *c = &g_ctx.client;
-			if (c->state == MPD_CONNECTED && g_ctx.song_duration >= 1)
-			{
-				char *where = xstrdup_printf
-					("%f", position * g_ctx.song_duration);
-				mpd_client_send_command (c, "seekcur", where, NULL);
-				free (where);
+		if (g_ctx.gauge_offset < 0
+		 || gauge_offset < 0 || gauge_offset >= g_ctx.gauge_width)
+			return false;
 
-				mpd_client_add_task (c, NULL, NULL);
-				mpd_client_idle (c, 0);
-			}
-			return;
+		float position = (float) gauge_offset / g_ctx.gauge_width;
+		struct mpd_client *c = &g_ctx.client;
+		if (c->state == MPD_CONNECTED && g_ctx.song_duration >= 1)
+		{
+			char *where = xstrdup_printf ("%f", position * g_ctx.song_duration);
+			mpd_client_send_command (c, "seekcur", where, NULL);
+			free (where);
+
+			mpd_client_add_task (c, NULL, NULL);
+			mpd_client_idle (c, 0);
 		}
 	}
 	else if (line == g_ctx.header_height - 1)
@@ -1415,15 +1412,17 @@ app_process_left_mouse_click (int line, int column)
 		if (column < indent)
 		{
 			app_switch_tab (g_ctx.help_tab);
-			return;
+			return true;
 		}
 		for (struct tab *iter = g_ctx.tabs; !winner && iter; iter = iter->next)
 		{
 			if (column < (indent += iter->name_width))
 				winner = iter;
 		}
-		if (winner)
-			app_switch_tab (winner);
+		if (!winner)
+			return false;
+
+		app_switch_tab (winner);
 	}
 	else
 	{
@@ -1431,7 +1430,7 @@ app_process_left_mouse_click (int line, int column)
 		int row_index = line - g_ctx.header_height;
 		if (row_index < 0
 		 || row_index >= (int) tab->item_count - tab->item_top)
-			return;
+			return false;
 
 		// TODO: handle the scrollbar a bit better than this
 		int visible_items = app_visible_items ();
@@ -1445,6 +1444,7 @@ app_process_left_mouse_click (int line, int column)
 			tab->item_selected = row_index + tab->item_top;
 		app_invalidate ();
 	}
+	return true;
 }
 
 static bool
@@ -1458,13 +1458,12 @@ app_process_mouse (termo_key_t *event)
 		return true;
 
 	if (button == 1)
-		app_process_left_mouse_click (line, column);
+		return app_process_left_mouse_click (line, column);
 	else if (button == 4)
-		app_process_user_action (USER_ACTION_SCROLL_UP);
+		return app_process_user_action (USER_ACTION_SCROLL_UP);
 	else if (button == 5)
-		app_process_user_action (USER_ACTION_SCROLL_DOWN);
-
-	return true;
+		return app_process_user_action (USER_ACTION_SCROLL_DOWN);
+	return false;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2088,10 +2087,7 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 	termo_result_t res;
 	while ((res = termo_getkey (g_ctx.tk, &event)) == TERMO_RES_KEY)
 		if (!app_process_termo_event (&event))
-		{
-			app_quit ();
-			return;
-		}
+			beep ();
 
 	if (res == TERMO_RES_AGAIN)
 		poller_timer_set (&g_ctx.tk_timer, termo_get_waittime (g_ctx.tk));
