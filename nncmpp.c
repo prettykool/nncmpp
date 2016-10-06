@@ -646,6 +646,21 @@ row_buffer_pop_cells (struct row_buffer *self, int space)
 }
 
 static void
+row_buffer_space (struct row_buffer *self, int width, chtype attrs)
+{
+	if (width < 0)
+		return;
+
+	while (self->chars_len + width >= self->chars_alloc)
+		self->chars = xreallocarray (self->chars,
+			sizeof *self->chars, (self->chars_alloc <<= 1));
+
+	struct row_char space = { .attrs = attrs, .c = ' ', .width = 1 };
+	while (width-- > 0)
+		self->chars[self->chars_len++] = space;
+}
+
+static void
 row_buffer_ellipsis (struct row_buffer *self, int target, chtype attrs)
 {
 	// TODO: get "attrs" from the last eaten item
@@ -726,10 +741,9 @@ app_write_line (const char *str, chtype attrs)
 
 	if (buf.total_width > COLS)
 		row_buffer_ellipsis (&buf, COLS, attrs);
+	row_buffer_space (&buf, COLS - buf.total_width, attrs);
 
 	row_buffer_flush (&buf);
-	for (int i = buf.total_width; i < COLS; i++)
-		addch (' ' | attrs);
 	row_buffer_free (&buf);
 }
 
@@ -838,12 +852,10 @@ app_write_gauge (struct row_buffer *buf, float ratio, int width)
 		len_left += remainder >= (int) 4;
 
 	int len_right = width - len_left;
-	while (len_left-- > 0)
-		row_buffer_append (buf, " ", APP_ATTR (ELAPSED));
+	row_buffer_space (buf, len_left, APP_ATTR (ELAPSED));
 	if (partial && len_right-- > 0)
 		row_buffer_append (buf, partial, APP_ATTR (REMAINS));
-	while (len_right-- > 0)
-		row_buffer_append (buf, " ", APP_ATTR (REMAINS));
+	row_buffer_space (buf, len_right, APP_ATTR (REMAINS));
 }
 
 static void
@@ -906,8 +918,8 @@ app_draw_status (void)
 		app_write_gauge (&buf,
 			(float) g_ctx.song_elapsed / g_ctx.song_duration, remaining);
 	}
-	else while (remaining-- > 0)
-		row_buffer_append (&buf, " ", a_normal);
+	else
+		row_buffer_space (&buf, remaining, a_normal);
 
 	if (volume)
 	{
@@ -1577,8 +1589,7 @@ info_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 
 	row_buffer_addv (buffer,
 		g_info_tab.keys.vector[item_index], A_BOLD, ":", A_BOLD, NULL);
-	while (buffer->total_width < 8)
-		row_buffer_append (buffer, " ", 0);
+	row_buffer_space (buffer, 8 - buffer->total_width, 0);
 	row_buffer_append (buffer, g_info_tab.values.vector[item_index], 0);
 }
 
@@ -1687,8 +1698,7 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	// We override the formatting including colors -- do it for the whole line
 	if (buffer->total_width > width)
 		row_buffer_ellipsis (buffer, width, item->attrs);
-	while (buffer->total_width < width)
-		row_buffer_append (buffer, " ", item->attrs);
+	row_buffer_space (buffer, width - buffer->total_width, item->attrs);
 }
 
 static void
