@@ -29,7 +29,7 @@ https://build.opensuse.org/project/repositories/home:pjanouch:git
 Building and Running
 --------------------
 Build dependencies: CMake, pkg-config, liberty (included), termo (included) +
-Runtime dependencies: ncursesw, libunistring
+Runtime dependencies: ncursesw, libunistring, cURL
 
  $ git clone --recursive https://github.com/pjanouch/nncmpp.git
  $ mkdir nncmpp/build
@@ -57,15 +57,21 @@ Create _~/.config/nncmpp/nncmpp.conf_ with contents like the following:
 
 ....
 settings = {
-	address = "localhost"
-	password = "<your password>"
-	root = "~/Music"
+	address    = "localhost"
+	password   = "<your password>"
+	root       = "~/Music"
 }
 colors = {
-	header = "reverse"
-	header_active = "ul"
-	even = "16 231"
-	odd = "16 255"
+	header     = ""
+	highlight  = "bold"
+	elapsed    = "reverse"
+	remains    = "ul"
+	tab_bar    = "reverse"
+	tab_active = "ul"
+	even       = ""
+	odd        = ""
+	selection  = "reverse"
+	scrollbar  = ""
 }
 ....
 

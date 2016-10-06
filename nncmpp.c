@@ -103,7 +103,10 @@ enum
 #include <uniwidth.h>
 #include <uniconv.h>
 
-#define CTRL_KEY(x)  ((x) - 'A' + 1)
+// We need cURL to extract links from Internet stream playlists.  It'd be way
+// too much code to do this all by ourselves, and there's nothing better around.
+
+#include <curl/curl.h>
 
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
