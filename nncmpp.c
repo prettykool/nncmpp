@@ -661,28 +661,28 @@ row_buffer_space (struct row_buffer *self, int width, chtype attrs)
 }
 
 static void
-row_buffer_ellipsis (struct row_buffer *self, int target, chtype attrs)
+row_buffer_ellipsis (struct row_buffer *self, int target)
 {
-	if (self->total_width <= target)
+	if (self->total_width <= target
+	 || !row_buffer_pop_cells (self, self->total_width - target))
 		return;
 
-	// TODO: get "attrs" from the last eaten item
-	row_buffer_pop_cells (self, self->total_width - target);
-
+	// We use attributes from the last character we've removed,
+	// assuming that we don't shrink the array (and there's no real need)
 	ucs4_t ellipsis = L'…';
 	if (app_is_character_in_locale (ellipsis))
 	{
 		if (self->total_width >= target)
 			row_buffer_pop_cells (self, 1);
 		if (self->total_width + 1 <= target)
-			row_buffer_append (self, "…", attrs);
+			row_buffer_append (self, "…",   self->chars[self->chars_len].attrs);
 	}
 	else if (target >= 3)
 	{
 		if (self->total_width >= target)
 			row_buffer_pop_cells (self, 3);
 		if (self->total_width + 3 <= target)
-			row_buffer_append (self, "...", attrs);
+			row_buffer_append (self, "...", self->chars[self->chars_len].attrs);
 	}
 }
 
@@ -741,7 +741,7 @@ app_write_line (const char *str, chtype attrs)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 	row_buffer_append (&buf, str, attrs);
-	row_buffer_ellipsis (&buf, COLS, attrs);
+	row_buffer_ellipsis (&buf, COLS);
 	row_buffer_space (&buf, COLS - buf.total_width, attrs);
 	row_buffer_flush (&buf);
 	row_buffer_free (&buf);
@@ -759,7 +759,7 @@ static void
 app_flush_buffer (struct row_buffer *buf, chtype attrs)
 {
 	app_next_row (attrs);
-	row_buffer_ellipsis (buf, COLS, attrs);
+	row_buffer_ellipsis (buf, COLS);
 	row_buffer_flush (buf);
 	row_buffer_free (buf);
 }
@@ -1083,7 +1083,7 @@ app_draw_view (void)
 		}
 
 		mvwhline (stdscr, g_ctx.header_height + row, 0, ' ' | row_attrs, COLS);
-		row_buffer_ellipsis (&buf, view_width, row_attrs);
+		row_buffer_ellipsis (&buf, view_width);
 		row_buffer_flush (&buf);
 		row_buffer_free (&buf);
 	}
@@ -1692,7 +1692,7 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	row_buffer_append (buffer, item->text, item->attrs);
 
 	// We override the formatting including colors -- do it for the whole line
-	row_buffer_ellipsis (buffer, width, item->attrs);
+	row_buffer_ellipsis (buffer, width);
 	row_buffer_space (buffer, width - buffer->total_width, item->attrs);
 }
 
