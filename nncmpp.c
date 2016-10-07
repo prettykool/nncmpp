@@ -1531,11 +1531,10 @@ app_process_termo_event (termo_key_t *event)
 	 && event->code.codepoint <= '9')
 	{
 		int n = event->code.codepoint - '0';
-		if (!app_goto_tab ((n == 0 ? 10 : n) - 1))
-			beep ();
-		return true;
+		if (app_goto_tab ((n == 0 ? 10 : n) - 1))
+			return true;
 	}
-	return true;
+	return false;
 }
 
 // --- Streams -----------------------------------------------------------------
