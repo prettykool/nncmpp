@@ -656,6 +656,7 @@ row_buffer_space (struct row_buffer *self, int width, chtype attrs)
 			sizeof *self->chars, (self->chars_alloc <<= 1));
 
 	struct row_char space = { .attrs = attrs, .c = ' ', .width = 1 };
+	self->total_width += width;
 	while (width-- > 0)
 		self->chars[self->chars_len++] = space;
 }
@@ -684,6 +685,13 @@ row_buffer_ellipsis (struct row_buffer *self, int target)
 		if (self->total_width + 3 <= target)
 			row_buffer_append (self, "...", self->chars[self->chars_len].attrs);
 	}
+}
+
+static void
+row_buffer_align (struct row_buffer *self, int target, chtype attrs)
+{
+	row_buffer_ellipsis (self, target);
+	row_buffer_space (self, target - self->total_width, attrs);
 }
 
 static void
@@ -731,7 +739,13 @@ app_invalidate (void)
 	poller_idle_set (&g_ctx.refresh_event);
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+static void
+app_flush_buffer (struct row_buffer *buf, int width, chtype attrs)
+{
+	row_buffer_align (buf, width, attrs);
+	row_buffer_flush (buf);
+	row_buffer_free (buf);
+}
 
 /// Write the given UTF-8 string padded with spaces.
 /// @param[in] attrs  Text attributes for the text, including padding.
@@ -741,27 +755,16 @@ app_write_line (const char *str, chtype attrs)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 	row_buffer_append (&buf, str, attrs);
-	row_buffer_ellipsis (&buf, COLS);
-	row_buffer_space (&buf, COLS - buf.total_width, attrs);
-	row_buffer_flush (&buf);
-	row_buffer_free (&buf);
+	app_flush_buffer (&buf, COLS, attrs);
 }
 
-/// Clear a row in the header to be used and increment the listview offset
-static void
-app_next_row (chtype attrs)
-{
-	mvwhline (stdscr, g_ctx.header_height++, 0, ' ' | attrs, COLS);
-}
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-// We typically write here to a single buffer serving the entire line
 static void
-app_flush_buffer (struct row_buffer *buf, chtype attrs)
+app_flush_header (struct row_buffer *buf, chtype attrs)
 {
-	app_next_row (attrs);
-	row_buffer_ellipsis (buf, COLS);
-	row_buffer_flush (buf);
-	row_buffer_free (buf);
+	move (g_ctx.header_height++, 0);
+	app_flush_buffer (buf, COLS, attrs);
 }
 
 static void
@@ -784,7 +787,7 @@ app_draw_song_info (void)
 		struct row_buffer buf;
 		row_buffer_init (&buf);
 		row_buffer_append (&buf, title, a_highlight);
-		app_flush_buffer (&buf, a_highlight);
+		app_flush_header (&buf, a_highlight);
 	}
 
 	char *artist = str_map_find (map, "artist");
@@ -807,7 +810,7 @@ app_draw_song_info (void)
 			row_buffer_append (&buf, " ", a_normal);
 		row_buffer_addv (&buf, "from ", a_normal, album, a_highlight, NULL);
 	}
-	app_flush_buffer (&buf, a_normal);
+	app_flush_header (&buf, a_normal);
 }
 
 static void
@@ -907,7 +910,6 @@ app_draw_status (void)
 		remaining -= strlen (volume);
 	}
 
-	// TODO: store the coordinates of the progress bar
 	if (!stopped && g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 1
 	 && remaining > 0)
 	{
@@ -925,7 +927,7 @@ app_draw_status (void)
 		free (volume);
 	}
 	g_ctx.controls_offset = g_ctx.header_height;
-	app_flush_buffer (&buf, a_normal);
+	app_flush_header (&buf, a_normal);
 }
 
 static void
@@ -944,11 +946,11 @@ app_draw_header (void)
 		app_draw_status ();
 		break;
 	case MPD_CONNECTING:
-		app_next_row (APP_ATTR (HEADER));
+		move (g_ctx.header_height++, 0);
 		app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
 		break;
 	case MPD_DISCONNECTED:
-		app_next_row (APP_ATTR (HEADER));
+		move (g_ctx.header_height++, 0);
 		app_write_line ("Disconnected", APP_ATTR (HEADER));
 	}
 
@@ -969,7 +971,7 @@ app_draw_header (void)
 		row_buffer_append (&buf, iter->name,
 			iter == g_ctx.active_tab ? a_active : a_normal);
 	}
-	app_flush_buffer (&buf, a_normal);
+	app_flush_header (&buf, a_normal);
 }
 
 static int
@@ -1082,10 +1084,8 @@ app_draw_view (void)
 				*attrs |=  row_attrs;
 		}
 
-		mvwhline (stdscr, g_ctx.header_height + row, 0, ' ' | row_attrs, COLS);
-		row_buffer_ellipsis (&buf, view_width);
-		row_buffer_flush (&buf);
-		row_buffer_free (&buf);
+		move (g_ctx.header_height + row, 0);
+		app_flush_buffer (&buf, view_width, row_attrs);
 	}
 
 	if (want_scrollbar)
@@ -1691,8 +1691,7 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	row_buffer_append (buffer, item->text, item->attrs);
 
 	// We override the formatting including colors -- do it for the whole line
-	row_buffer_ellipsis (buffer, width);
-	row_buffer_space (buffer, width - buffer->total_width, item->attrs);
+	row_buffer_align (buffer, width, item->attrs);
 }
 
 static void
@@ -2158,7 +2157,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	else
 	{
 		// TODO: remember the position and restore it
-		mvwhline (stdscr, LINES - 1, 0, A_REVERSE, COLS);
+		move (LINES - 1, 0);
 		app_write_line (message.str, A_REVERSE);
 	}
 	str_free (&message);
