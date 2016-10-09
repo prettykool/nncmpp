@@ -61,6 +61,7 @@ enum
 
 #define LIBERTY_WANT_POLLER
 #define LIBERTY_WANT_ASYNC
+#define LIBERTY_WANT_PROTO_HTTP
 #include "liberty/liberty.c"
 
 #include <sys/un.h>
@@ -335,7 +336,7 @@ app_load_color (struct config_item *subtree, const char *name, int id)
 
 	struct str_vector v;
 	str_vector_init (&v);
-	cstr_split_ignore_empty (value, ' ', &v);
+	cstr_split (value, " ", true, &v);
 
 	int colors = 0;
 	struct attrs attrs = { -1, -1, 0 };
@@ -1539,7 +1540,365 @@ app_process_termo_event (termo_key_t *event)
 
 // --- Streams -----------------------------------------------------------------
 
-// TODO: play stream on Enter (just send a command, presumably)
+// TODO: either move to app_context or write a poller abstraction for cURL
+static struct
+{
+	CURLM *curl;                        ///< cURL multi handle
+	struct poller_timer timer;          ///< cURL timer
+
+	struct poller poller;               ///< Poller
+	bool polling;                       ///< Polling
+
+	char curl_error[CURL_ERROR_SIZE];   ///< cURL error info buffer
+	CURLcode result;                    ///< Transfer result
+}
+g_curl;
+
+static void
+app_curl_collect (curl_socket_t s, int ev_bitmask)
+{
+	int running = 0;
+	CURLMcode res;
+	// XXX: ignoring errors, in particular CURLM_CALL_MULTI_PERFORM
+	if ((res = curl_multi_socket_action (g_curl.curl, s, ev_bitmask, &running)))
+		print_debug ("cURL: %s", curl_multi_strerror (res));
+
+	CURLMsg *msg;
+	while ((msg = curl_multi_info_read (g_curl.curl, &running)))
+	{
+		// TODO: notify about completion
+		if (msg->msg == CURLMSG_DONE)
+		{
+			(void) msg->easy_handle;
+			g_curl.result = msg->data.result;
+			g_curl.polling = false;
+		}
+	}
+}
+
+static void
+app_curl_on_socket (const struct pollfd *pfd, void *user_data)
+{
+	(void) pfd;
+	(void) user_data;
+
+	int mask = 0;
+	if (pfd->revents & POLLIN)  mask |= CURL_CSELECT_IN;
+	if (pfd->revents & POLLOUT) mask |= CURL_CSELECT_OUT;
+	if (pfd->revents & POLLERR) mask |= CURL_CSELECT_ERR;
+	app_curl_collect (pfd->fd, mask);
+}
+
+static int
+app_curl_on_socket_action (CURL *easy, curl_socket_t s, int what,
+	void *user_data, void *socket_data)
+{
+	(void) easy;
+	(void) user_data;
+
+	// TODO: when we move to the main poller, this should be a linked list
+	//   so that we can be sure to free it all
+	struct poller_fd *fd;
+	if (!(fd = socket_data))
+	{
+		poller_fd_init ((fd = xmalloc (sizeof *fd)), &g_curl.poller, s);
+		fd->dispatcher = app_curl_on_socket;
+		curl_multi_assign (g_curl.curl, s, fd);
+	}
+	if (what == CURL_POLL_REMOVE)
+	{
+		poller_fd_reset (fd);
+		free (fd);
+	}
+	else
+	{
+		short events = 0;
+		if (what == CURL_POLL_IN)    events = POLLIN;
+		if (what == CURL_POLL_OUT)   events =          POLLOUT;
+		if (what == CURL_POLL_INOUT) events = POLLIN | POLLOUT;
+		poller_fd_set (fd, events);
+	}
+	return 0;
+}
+
+static void
+app_curl_on_timer (void *user_data)
+{
+	(void) user_data;
+	app_curl_collect (CURL_SOCKET_TIMEOUT, 0);
+}
+
+static int
+app_curl_on_timer_change (CURLM *multi, long timeout_ms, void *user_data)
+{
+	(void) multi;
+	(void) user_data;
+
+	if (timeout_ms < 0)
+		poller_timer_reset (&g_curl.timer);
+	else
+		poller_timer_set (&g_curl.timer, timeout_ms);
+	return 0;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static CURL *
+app_curl_start (const char *uri, struct error **e)
+{
+	CURL *easy;
+	if (!(easy = curl_easy_init ()))
+	{
+		error_set (e, "cURL setup failed");
+		return NULL;
+	}
+
+	// We already take care of SIGPIPE, and native DNS timeouts are only
+	// a problem for people without the AsynchDNS feature.
+	//
+	// Unfortunately, cURL doesn't allow custom callbacks for DNS.
+	// The most we could try is parse out the hostname and provide an address
+	// override for it using CURLOPT_RESOLVE.  Or be our own SOCKS4A/5 proxy.
+	CURLcode res;
+	if ((res = curl_easy_setopt (easy, CURLOPT_NOSIGNAL,       1L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_FOLLOWLOCATION, 1L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_NOPROGRESS,     1L))
+	// TODO: make the timeout a bit larger once we're asynchronous
+	 || (res = curl_easy_setopt (easy, CURLOPT_TIMEOUT,        5L))
+	// TODO: the error needs to be one per "CURL *"
+	 || (res = curl_easy_setopt (easy, CURLOPT_ERRORBUFFER, g_curl.curl_error))
+	// Not checking anything, we just want some data, any data
+	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYPEER, 0L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYHOST, 0L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_URL,            uri)))
+	{
+		error_set (e, "%s", curl_easy_strerror (res));
+		curl_easy_cleanup (easy);
+		return NULL;
+	}
+
+	return easy;
+}
+
+static size_t
+write_callback (char *ptr, size_t size, size_t nmemb, void *user_data)
+{
+	struct str *buf = user_data;
+	str_append_data (buf, ptr, size * nmemb);
+
+	// Invoke CURLE_WRITE_ERROR when we've received enough data for a playlist
+	if (buf->len >= (1 << 16))
+		return 0;
+
+	return size * nmemb;
+}
+
+// TODO: don't block on this, move this somehow to the main event loop
+static bool
+app_download (const char *uri, struct str *buf, char **content_type,
+	struct error **e)
+{
+	bool result = false;
+	poller_init (&g_curl.poller);
+	poller_timer_init (&g_curl.timer, &g_curl.poller);
+	g_curl.timer.dispatcher = app_curl_on_timer;
+	g_curl.polling = true;
+
+	if (!(g_curl.curl = curl_multi_init ()))
+	{
+		error_set (e, "cURL setup failed");
+		goto error_1;
+	}
+
+	CURLMcode mres;
+	if ((mres = curl_multi_setopt (g_curl.curl,
+			CURLMOPT_SOCKETFUNCTION, app_curl_on_socket_action))
+	 || (mres = curl_multi_setopt (g_curl.curl,
+		CURLMOPT_TIMERFUNCTION, app_curl_on_timer_change)))
+	{
+		error_set (e, "%s: %s",
+			"cURL setup failed", curl_multi_strerror (mres));
+		goto error_2;
+	}
+
+	CURL *easy;
+	if (!(easy = app_curl_start (uri, e)))
+		goto error_2;
+
+	CURLcode res;
+	if ((res = curl_easy_setopt (easy, CURLOPT_WRITEDATA, buf))
+	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEFUNCTION, write_callback)))
+	{
+		error_set (e, "%s: %s", "cURL setup failed", curl_easy_strerror (res));
+		goto error_3;
+	}
+
+	if ((mres = curl_multi_add_handle (g_curl.curl, easy)))
+	{
+		error_set (e, "%s: %s",
+			"cURL setup failed", curl_multi_strerror (mres));
+		goto error_3;
+	}
+
+	poller_timer_set (&g_curl.timer, 0);
+	while (g_curl.polling)
+		poller_run (&g_curl.poller);
+
+	if (g_curl.result
+	 && g_curl.result != CURLE_WRITE_ERROR)
+	{
+		error_set (e, "%s: %s", "download failed", g_curl.curl_error);
+		goto error_4;
+	}
+
+	long code;
+	char *type;
+	if ((res = curl_easy_getinfo (easy, CURLINFO_RESPONSE_CODE, &code))
+	 || (res = curl_easy_getinfo (easy, CURLINFO_CONTENT_TYPE, &type)))
+	{
+		error_set (e, "%s: %s",
+			"cURL info retrieval failed", curl_easy_strerror (res));
+		goto error_4;
+	}
+
+	if (code != 200)
+	{
+		error_set (e, "%s: %ld", "unexpected HTTP response code", code);
+		goto error_4;
+	}
+	if (type && content_type)
+		*content_type = xstrdup (type);
+
+	result = true;
+
+error_4:
+	curl_multi_remove_handle (g_curl.curl, easy);
+error_3:
+	curl_easy_cleanup (easy);
+error_2:
+	curl_multi_cleanup (g_curl.curl);
+error_1:
+	poller_free (&g_curl.poller);
+	return result;
+}
+
+static bool
+is_content_type (const char *content_type,
+	const char *expected_type, const char *expected_subtype)
+{
+	char *type = NULL, *subtype = NULL;
+	bool result = http_parse_media_type (content_type, &type, &subtype, NULL)
+		&& !strcasecmp_ascii (type, expected_type)
+		&& !strcasecmp_ascii (subtype, expected_subtype);
+	free (type);
+	free (subtype);
+	return result;
+}
+
+static void
+parse_playlist (const char *playlist, const char *content_type,
+	struct str_vector *out)
+{
+	// We accept a lot of very broken stuff because this is the real world
+	struct str_vector lines;
+	str_vector_init (&lines);
+	cstr_split (playlist, "\r\n", true, &lines);
+
+	// Since this excludes '"', it should even work for XMLs (w/o entities)
+	const char *extract_re =
+		"(https?://([][a-z0-9._~:/?#@!$&'()*+,;=-]|%[a-f0-9]{2})+)";
+	if ((lines.len && !strcasecmp_ascii (lines.vector[0], "[playlist]"))
+	 || (content_type && is_content_type (content_type, "audio", "x-scpls")))
+		extract_re = "^File[^=]*=(.*)";
+	else if ((lines.len && !strcasecmp_ascii (lines.vector[0], "#EXTM3U"))
+	 || (content_type && is_content_type (content_type, "audio", "x-mpegurl")))
+		extract_re = "^([^#].*)";
+
+	regex_t *re = regex_compile (extract_re, REG_EXTENDED, NULL);
+	hard_assert (re != NULL);
+
+	regmatch_t groups[2];
+	for (size_t i = 0; i < lines.len; i++)
+	{
+		if (regexec (re, lines.vector[i], 2, groups, 0) != REG_NOMATCH)
+			str_vector_add (out, xstrndup (lines.vector[i] + groups[1].rm_so,
+				groups[1].rm_eo - groups[1].rm_so));
+	}
+	regex_free (re);
+	str_vector_free (&lines);
+}
+
+static bool
+streams_extract_links (const char *uri, struct str_vector *out,
+	struct error **e)
+{
+	struct str buf;
+	str_init (&buf);
+
+	bool success;
+	char *content_type = NULL;
+	if (!(success = app_download (uri, &buf, &content_type, e)))
+		goto error;
+
+	// Since playlists are also "audio/*", this seems like a sane thing to do
+	bool is_binary = false;
+	for (size_t i = 0; i < buf.len; i++)
+	{
+		uint8_t c = buf.str[i];
+		is_binary |= (c < 32) & (c != '\t') & (c != '\r') & (c != '\n');
+	}
+	if (is_binary)
+		str_vector_add (out, uri);
+	else
+		parse_playlist (buf.str, content_type, out);
+	free (content_type);
+
+error:
+	str_free (&buf);
+	return success;
+}
+
+static bool
+streams_tab_on_action (enum user_action action)
+{
+	struct tab *self = g_ctx.active_tab;
+	if (self->item_selected < 0)
+		return false;
+
+	// For simplicity the URL is the string following the stream name
+	const char *uri = 1 + strchr (g_ctx.streams.vector[self->item_selected], 0);
+
+	struct mpd_client *c = &g_ctx.client;
+	bool result = true;
+	switch (action)
+	{
+	case USER_ACTION_MPD_REPLACE:
+		// FIXME: we also need to play it if we've been playing things already
+		MPD_SIMPLE ("clear")
+	case USER_ACTION_CHOOSE:
+	case USER_ACTION_MPD_ADD:
+	{
+		struct str_vector links;
+		str_vector_init (&links);
+
+		struct error *e = NULL;
+		if (!streams_extract_links (uri, &links, &e))
+		{
+			print_debug ("%s", e->message);
+			str_vector_add (&links, uri);
+		}
+
+		for (size_t i = 0; i < links.len; i++)
+			MPD_SIMPLE ("add", links.vector[i])
+
+		str_vector_free (&links);
+		break;
+	}
+	default:
+		result = false;
+	}
+	return result;
+}
 
 static void
 streams_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
@@ -1554,6 +1913,7 @@ streams_tab_init (void)
 {
 	static struct tab super;
 	tab_init (&super, "Streams");
+	super.on_action = streams_tab_on_action;
 	super.on_item_draw = streams_tab_on_item_draw;
 	super.item_count = g_ctx.streams.len;
 	return &super;
