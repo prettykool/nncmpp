@@ -28,7 +28,8 @@ https://build.opensuse.org/project/repositories/home:pjanouch:git
 
 Building and Running
 --------------------
-Build dependencies: CMake, pkg-config, liberty (included), termo (included) +
+Build dependencies: CMake, pkg-config, help2man, liberty (included),
+                    termo (included) +
 Runtime dependencies: ncursesw, libunistring, cURL
 
  $ git clone --recursive https://github.com/pjanouch/nncmpp.git
@@ -72,6 +73,10 @@ colors = {
 	odd        = ""
 	selection  = "reverse"
 	scrollbar  = ""
+}
+streams = {
+	"dnbradio.com" = "http://www.dnbradio.com/hi.m3u"
+	"BassDrive.com" = "http://bassdrive.com/v2/streams/BassDrive.pls"
 }
 ....
 
