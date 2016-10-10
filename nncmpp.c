@@ -264,10 +264,7 @@ poller_curl_init (struct poller_curl *self, struct poller *poller,
 {
 	memset (self, 0, sizeof *self);
 	if (!(self->multi = curl_multi_init ()))
-	{
-		error_set (e, "cURL setup failed");
-		return false;
-	}
+		return error_set (e, "cURL setup failed");
 
 	CURLMcode mres;
 	if ((mres = curl_multi_setopt (self->multi,
@@ -277,10 +274,9 @@ poller_curl_init (struct poller_curl *self, struct poller *poller,
 	 || (mres = curl_multi_setopt (self->multi, CURLMOPT_SOCKETDATA, self))
 	 || (mres = curl_multi_setopt (self->multi, CURLMOPT_TIMERDATA, self)))
 	{
-		error_set (e, "%s: %s",
-			"cURL setup failed", curl_multi_strerror (mres));
 		curl_multi_cleanup (self->multi);
-		return false;
+		return error_set (e, "%s: %s",
+			"cURL setup failed", curl_multi_strerror (mres));
 	}
 
 	poller_timer_init (&self->timer, (self->poller = poller));
@@ -310,10 +306,7 @@ poller_curl_spawn (struct poller_curl_task *task, struct error **e)
 {
 	CURL *easy;
 	if (!(easy = curl_easy_init ()))
-	{
-		error_set (e, "cURL setup failed");
-		return false;
-	}
+		return error_set (e, "cURL setup failed");
 
 	// We already take care of SIGPIPE, and native DNS timeouts are only
 	// a problem for people without the AsynchDNS feature.
@@ -327,9 +320,8 @@ poller_curl_spawn (struct poller_curl_task *task, struct error **e)
 	 || (res = curl_easy_setopt (easy, CURLOPT_ERRORBUFFER, task->curl_error))
 	 || (res = curl_easy_setopt (easy, CURLOPT_PRIVATE,     task)))
 	{
-		error_set (e, "%s", curl_easy_strerror (res));
 		curl_easy_cleanup (easy);
-		return false;
+		return error_set (e, "%s", curl_easy_strerror (res));
 	}
 
 	task->easy = easy;
@@ -341,22 +333,18 @@ poller_curl_add (struct poller_curl *self, CURL *easy, struct error **e)
 {
 	CURLMcode mres;
 	// "CURLMOPT_TIMERFUNCTION [...] will be called from within this function"
-	if (!(mres = curl_multi_add_handle (self->multi, easy)))
-		return true;
-
-	error_set (e, "%s", curl_multi_strerror (mres));
-	return false;
+	if ((mres = curl_multi_add_handle (self->multi, easy)))
+		return error_set (e, "%s", curl_multi_strerror (mres));
+	return true;
 }
 
 static bool
 poller_curl_remove (struct poller_curl *self, CURL *easy, struct error **e)
 {
 	CURLMcode mres;
-	if (!(mres = curl_multi_remove_handle (self->multi, easy)))
-		return true;
-
-	error_set (e, "%s", curl_multi_strerror (mres));
-	return false;
+	if ((mres = curl_multi_remove_handle (self->multi, easy)))
+		return error_set (e, "%s", curl_multi_strerror (mres));
+	return true;
 }
 
 // --- Application -------------------------------------------------------------
