@@ -2228,7 +2228,8 @@ info_tab_update (void)
 		info_tab_add (map, "Album");
 		info_tab_add (map, "Track");
 		info_tab_add (map, "Genre");
-		info_tab_add (map, "file");
+		// Yes, it is "file", but this is also for display
+		info_tab_add (map, "File");
 	}
 }
 
