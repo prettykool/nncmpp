@@ -1438,6 +1438,13 @@ app_move_selection (int diff)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
+app_prepend_tab (struct tab *tab)
+{
+	LIST_PREPEND (g_ctx.tabs, tab);
+	app_invalidate ();
+}
+
+static void
 app_switch_tab (struct tab *tab)
 {
 	g_ctx.active_tab = tab;
@@ -2728,32 +2735,19 @@ main (int argc, char *argv[])
 	app_init_context ();
 	app_load_configuration ();
 	app_init_terminal ();
-
-	// Redirect all messages from liberty to a special tab so they're not lost
-	struct tab *new_tab;
-	if (g_debug_mode)
-	{
-		new_tab = debug_tab_init ();
-		LIST_PREPEND (g_ctx.tabs, new_tab);
-	}
-
-	g_log_message_real = app_log_handler;
-
-	new_tab = info_tab_init ();
-	LIST_PREPEND (g_ctx.tabs, new_tab);
-
-	if (g_ctx.streams.len)
-	{
-		new_tab = streams_tab_init ();
-		LIST_PREPEND (g_ctx.tabs, new_tab);
-	}
-
-	g_ctx.help_tab = help_tab_init ();
-	g_ctx.active_tab = g_ctx.help_tab;
-
 	signals_setup_handlers ();
 	app_init_poller_events ();
-	app_invalidate ();
+
+	if (g_debug_mode)
+		app_prepend_tab (debug_tab_init ());
+
+	// Redirect all messages from liberty to a special tab so they're not lost
+	g_log_message_real = app_log_handler;
+
+	app_prepend_tab (info_tab_init ());
+	if (g_ctx.streams.len)
+		app_prepend_tab (streams_tab_init ());
+	app_switch_tab ((g_ctx.help_tab = help_tab_init ()));
 
 	g_ctx.polling = true;
 	while (g_ctx.polling)
