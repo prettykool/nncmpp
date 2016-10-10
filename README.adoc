@@ -11,7 +11,7 @@ names, and should be pronounced as "nincompoop".
 
 Features
 --------
-Currently it's under development and doesn't do much else than show the status.
+Currently it's under development and doesn't show the music library yet.
 
 Since I only use the filesystem browsing mode, that's also the only thing
 I care to implement.  Anything else will have to be user-contributed while

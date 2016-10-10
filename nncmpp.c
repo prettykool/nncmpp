@@ -142,6 +142,13 @@ clock_msec (clockid_t clock)
 	return (int64_t) tp.tv_sec * 1000 + (int64_t) tp.tv_nsec / 1000000;
 }
 
+static bool
+xstrtoul_map (const struct str_map *map, const char *key, unsigned long *out)
+{
+	const char *field = str_map_find (map, key);
+	return field && xstrtoul (out, field, 10);
+}
+
 static char *
 latin1_to_utf8 (const char *latin1)
 {
@@ -455,6 +462,13 @@ struct tab
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+struct playlist
+{
+	struct str_map *items;              ///< Current playlist
+	size_t len;                         ///< Length
+	size_t alloc;                       ///< Allocated items
+};
+
 struct attrs
 {
 	short fg;                           ///< Foreground colour index
@@ -491,9 +505,13 @@ static struct app_context
 	int64_t elapsed_since;              ///< Time of the next tick
 
 	// TODO: initialize these to -1
+	int song;                           ///< Current song index
 	int song_elapsed;                   ///< Song elapsed in seconds
 	int song_duration;                  ///< Song duration in seconds
 	int volume;                         ///< Current volume
+
+	struct playlist playlist;           ///< Current playlist
+	uint32_t playlist_version;          ///< Playlist version
 
 	// Data:
 
@@ -547,6 +565,68 @@ static void
 tab_free (struct tab *self)
 {
 	free (self->name);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+playlist_init (struct playlist *self)
+{
+	memset (self, 0, sizeof *self);
+	self->items = xcalloc (sizeof *self->items, (self->alloc = 16));
+}
+
+static void
+playlist_free (struct playlist *self)
+{
+	for (size_t i = 0; i < self->len; i++)
+		str_map_free (&self->items[i]);
+	free (self->items);
+}
+
+static bool
+playlist_set (struct playlist *self, int i, struct str_map *item)
+{
+	if (i < 0 || (size_t) i >= self->len)
+		return false;
+
+	str_map_free (&self->items[i]);
+	self->items[i] = *item;
+	return true;
+}
+
+static struct str_map *
+playlist_get (struct playlist *self, int i)
+{
+	if (i < 0 || (size_t) i >= self->len)
+		return false;
+
+	return &self->items[i];
+}
+
+static void
+playlist_resize (struct playlist *self, size_t len)
+{
+	// Make the allocated array big enough but not too large
+	size_t new_alloc = self->alloc;
+	while (new_alloc < len)
+		new_alloc <<= 1;
+	while (len < (new_alloc >> 2)
+		&& new_alloc >= (STR_MAP_MIN_ALLOC << 1))
+		new_alloc >>= 1;
+
+	// Dispose of items that are out of range and resize the array if needed
+	for (size_t i = len; i < self->len; i++)
+		str_map_free (&self->items[i]);
+	if (new_alloc != self->alloc)
+		self->items = xreallocarray (self->items,
+			sizeof *self->items, new_alloc);
+
+	// We need to initialize placeholders so that str_map_find() succeeds
+	for (size_t i = self->len; i < len; i++)
+		str_map_init (&self->items[i]);
+
+	self->len = len;
 }
 
 // --- Configuration -----------------------------------------------------------
@@ -730,6 +810,7 @@ app_init_context (void)
 	mpd_client_init (&g_ctx.client, &g_ctx.poller);
 	config_init (&g_ctx.config);
 	str_vector_init (&g_ctx.streams);
+	playlist_init (&g_ctx.playlist);
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
@@ -782,6 +863,7 @@ app_free_context (void)
 	mpd_client_free (&g_ctx.client);
 	str_map_free (&g_ctx.playback_info);
 	str_vector_free (&g_ctx.streams);
+	playlist_free (&g_ctx.playlist);
 
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
@@ -1031,9 +1113,9 @@ app_flush_header (struct row_buffer *buf, chtype attrs)
 static void
 app_draw_song_info (void)
 {
-	// The map doesn't need to be initialized at all, so we need to check
-	struct str_map *map = &g_ctx.playback_info;
-	if (!soft_assert (map->len != 0))
+	struct str_map *map;
+	if (!(map = playlist_get (&g_ctx.playlist, g_ctx.song))
+	 || !soft_assert (map->len != 0))
 		return;
 
 	// XXX: can we get rid of this and still make it look acceptable?
@@ -1805,7 +1887,44 @@ app_process_termo_event (termo_key_t *event)
 	return false;
 }
 
+// --- Current tab -------------------------------------------------------------
+
+// TODO: remove the useless wrapper struct?
+static struct
+{
+	struct tab super;                   ///< Parent class
+}
+g_current_tab;
+
+static void
+current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
+	int width)
+{
+	// TODO: better output
+	struct str_map *map = playlist_get (&g_ctx.playlist, item_index);
+	row_buffer_append (buffer, str_map_find (map, "file"),
+		(int) item_index == g_ctx.song ? A_BOLD : 0);
+}
+
+static void
+current_tab_update (void)
+{
+	g_current_tab.super.item_count = g_ctx.playlist.len;
+	app_invalidate ();
+}
+
+static struct tab *
+current_tab_init (void)
+{
+	struct tab *super = &g_current_tab.super;
+	tab_init (super, "Current");
+	super->on_item_draw = current_tab_on_item_draw;
+	return super;
+}
+
 // --- Streams -----------------------------------------------------------------
+
+// MPD can only parse m3u8 playlists, and only when it feels like doing so
 
 struct stream_tab_task
 {
@@ -2101,13 +2220,16 @@ info_tab_update (void)
 	str_vector_reset (&g_info_tab.values);
 	g_info_tab.super.item_count = 0;
 
-	struct str_map *map = &g_ctx.playback_info;
-	info_tab_add (map, "Title");
-	info_tab_add (map, "Artist");
-	info_tab_add (map, "Album");
-	info_tab_add (map, "Track");
-	info_tab_add (map, "Genre");
-	info_tab_add (map, "File");
+	struct str_map *map;
+	if ((map = playlist_get (&g_ctx.playlist, g_ctx.song)))
+	{
+		info_tab_add (map, "Title");
+		info_tab_add (map, "Artist");
+		info_tab_add (map, "Album");
+		info_tab_add (map, "Track");
+		info_tab_add (map, "Genre");
+		info_tab_add (map, "file");
+	}
 }
 
 static struct tab *
@@ -2257,11 +2379,9 @@ mpd_update_playback_state (void)
 		}
 	}
 
-	unsigned long tmp;
-	if (time     && xstrtoul (&tmp, time,     10))
-		g_ctx.song_elapsed  = tmp;
-	if (duration && xstrtoul (&tmp, duration, 10))
-		g_ctx.song_duration = tmp;
+	unsigned long n;
+	if (time     && xstrtoul (&n, time,     10))  g_ctx.song_elapsed  = n;
+	if (duration && xstrtoul (&n, duration, 10))  g_ctx.song_duration = n;
 
 	// We could also just poll the server each half a second but let's not
 	int msec_past_second = 0;
@@ -2271,11 +2391,11 @@ mpd_update_playback_state (void)
 	{
 		// For some reason this is much more precise
 		*period++ = '\0';
-		if (xstrtoul (&tmp, elapsed, 10))
-			g_ctx.song_elapsed = tmp;
+		if (xstrtoul (&n, elapsed, 10))
+			g_ctx.song_elapsed = n;
 
-		if (xstrtoul (&tmp, period, 10))
-			msec_past_second = tmp;
+		if (xstrtoul (&n, period, 10))
+			msec_past_second = n;
 	}
 	if (g_ctx.state == PLAYER_PLAYING)
 	{
@@ -2284,29 +2404,63 @@ mpd_update_playback_state (void)
 	}
 
 	// The server sends -1 when nothing is being played right now
-	char *volume = str_map_find (map, "volume");
-	if (volume && xstrtoul (&tmp, volume, 10))
-		g_ctx.volume = tmp;
+	if (xstrtoul_map (map, "volume",   &n))  g_ctx.volume           = n;
+
+	if (xstrtoul_map (map, "playlist", &n))  g_ctx.playlist_version = n;
+	if (xstrtoul_map (map, "song",     &n))  g_ctx.song             = n;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-// Sometimes it's not that easy and there can be repeating entries
 static void
-mpd_vector_to_map (const struct str_vector *data, struct str_map *map)
+mpd_init_response_map (struct str_map *map)
 {
 	str_map_init (map);
 	map->key_xfrm = tolower_ascii_strxfrm;
 	map->free = free;
+}
 
-	char *key, *value;
+static void
+mpd_process_info_chunk (struct str_map *map, char *file)
+{
+	unsigned long n;
+	if (!file)
+	{
+		if (xstrtoul_map (map, "playlistlength", &n))
+			playlist_resize (&g_ctx.playlist, n);
+		g_ctx.playback_info = *map;
+	}
+	else if (!xstrtoul_map (map, "pos", &n)
+		|| !playlist_set (&g_ctx.playlist, n, map))
+		str_map_free (map);
+
+	mpd_init_response_map (map);
+}
+
+static void
+mpd_process_info (const struct str_vector *data)
+{
+	struct str_map map;
+	mpd_init_response_map (&map);
+
+	// First there's the status, followed by playlist items chunked by "file"
+	char *key, *value, *file = NULL;
 	for (size_t i = 0; i < data->len; i++)
 	{
-		if ((key = mpd_client_parse_kv (data->vector[i], &value)))
-			str_map_set (map, key, xstrdup (value));
-		else
+		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
+		{
 			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+			continue;
+		}
+		if (!strcasecmp_ascii (key, "file"))
+		{
+			mpd_process_info_chunk (&map, file);
+			file = value;
+		}
+		str_map_set (&map, key, xstrdup (value));
 	}
+	mpd_process_info_chunk (&map, file);
+	str_map_free (&map);
 }
 
 static void
@@ -2316,21 +2470,17 @@ mpd_on_info_response (const struct mpd_response *response,
 	(void) user_data;
 
 	// TODO: do this also on disconnect
+	g_ctx.song = -1;
 	g_ctx.song_elapsed = -1;
 	g_ctx.song_duration = -1;
 	g_ctx.volume = -1;
 	str_map_free (&g_ctx.playback_info);
 	poller_timer_reset (&g_ctx.elapsed_event);
+	g_ctx.playlist_version = 0;
 	// TODO: preset an error player state?
 
 	if (response->success)
-	{
-		// Note that we may receive a "time" field twice, however the right
-		// one wins here due to the order we send the commands in
-		struct str_map map;
-		mpd_vector_to_map (data, &map);
-		g_ctx.playback_info = map;
-	}
+		mpd_process_info (data);
 	else
 	{
 		print_debug ("%s: %s",
@@ -2338,6 +2488,7 @@ mpd_on_info_response (const struct mpd_response *response,
 	}
 
 	mpd_update_playback_state ();
+	current_tab_update ();
 	info_tab_update ();
 	app_invalidate ();
 }
@@ -2363,11 +2514,12 @@ mpd_request_info (void)
 	struct mpd_client *c = &g_ctx.client;
 
 	mpd_client_list_begin (c);
-	mpd_client_send_command (c, "currentsong", NULL);
 	mpd_client_send_command (c, "status", NULL);
+	char *last_version = xstrdup_printf ("%" PRIu32, g_ctx.playlist_version);
+	mpd_client_send_command (c, "plchanges", last_version, NULL);
+	free (last_version);
 	mpd_client_list_end (c);
 	mpd_client_add_task (c, mpd_on_info_response, NULL);
-
 	mpd_client_idle (c, 0);
 }
 
@@ -2747,6 +2899,7 @@ main (int argc, char *argv[])
 	app_prepend_tab (info_tab_init ());
 	if (g_ctx.streams.len)
 		app_prepend_tab (streams_tab_init ());
+	app_prepend_tab (current_tab_init ());
 	app_switch_tab ((g_ctx.help_tab = help_tab_init ()));
 
 	g_ctx.polling = true;
