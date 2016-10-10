@@ -161,6 +161,42 @@ latin1_to_utf8 (const char *latin1)
 	return str_steal (&converted);
 }
 
+static int
+print_curl_debug (CURL *easy, curl_infotype type, char *data, size_t len,
+	void *ud)
+{
+	(void) easy;
+	(void) ud;
+	(void) type;
+
+	char copy[len + 1];
+	for (size_t i = 0; i < len; i++)
+	{
+		uint8_t c = data[i];
+		copy[i] = c >= 32 || c == '\n' ? c : '.';
+	}
+	copy[len] = '\0';
+
+	char *next;
+	for (char *p = copy; p; p = next)
+	{
+		if ((next = strchr (p, '\n')))
+			*next++ = '\0';
+		if (!*p)
+			continue;
+
+		if (!utf8_validate (p, strlen (p)))
+		{
+			char *fixed = latin1_to_utf8 (p);
+			print_debug ("cURL: %s", fixed);
+			free (fixed);
+		}
+		else
+			print_debug ("cURL: %s", p);
+	}
+	return 0;
+}
+
 // --- cURL async wrapper ------------------------------------------------------
 
 // You are meant to subclass this structure, no user_data pointers needed
@@ -1767,108 +1803,10 @@ app_process_termo_event (termo_key_t *event)
 struct stream_tab_task
 {
 	struct poller_curl_task curl;       ///< Superclass
+	struct str data;                    ///< Downloaded data
 	bool polling;                       ///< Still downloading
-	CURLcode result;                    ///< Operation result
+	bool replace;                       ///< Should playlist be replaced?
 };
-
-static size_t
-write_callback (char *ptr, size_t size, size_t nmemb, void *user_data)
-{
-	struct str *buf = user_data;
-	str_append_data (buf, ptr, size * nmemb);
-
-	// Invoke CURLE_WRITE_ERROR when we've received enough data for a playlist
-	if (buf->len >= (1 << 16))
-		return 0;
-
-	return size * nmemb;
-}
-
-static void
-app_download_on_done (CURLMsg *msg, struct poller_curl_task *task)
-{
-	struct stream_tab_task *self =
-		CONTAINER_OF (task, struct stream_tab_task, curl);
-	self->polling = false;
-	self->result = msg->data.result;
-}
-
-static bool
-app_download (const char *uri, struct str *buf, char **content_type,
-	struct error **e)
-{
-	struct poller poller;
-	poller_init (&poller);
-
-	struct poller_curl pc;
-	hard_assert (poller_curl_init (&pc, &poller, NULL));
-	struct stream_tab_task task;
-	hard_assert (poller_curl_spawn (&task.curl, NULL));
-
-	CURL *easy = task.curl.easy;
-	bool result = false;
-
-	CURLcode res;
-	if ((res = curl_easy_setopt (easy, CURLOPT_FOLLOWLOCATION, 1L))
-	 || (res = curl_easy_setopt (easy, CURLOPT_NOPROGRESS,     1L))
-	// TODO: make the timeout a bit larger once we're asynchronous
-	 || (res = curl_easy_setopt (easy, CURLOPT_TIMEOUT,        5L))
-	// Not checking anything, we just want some data, any data
-	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYPEER, 0L))
-	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYHOST, 0L))
-	 || (res = curl_easy_setopt (easy, CURLOPT_URL,            uri))
-
-	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEDATA,      buf))
-	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEFUNCTION,  write_callback)))
-	{
-		error_set (e, "%s: %s", "cURL setup failed", curl_easy_strerror (res));
-		goto error_1;
-	}
-
-	task.curl.on_done = app_download_on_done;
-	hard_assert (poller_curl_add (&pc, task.curl.easy, NULL));
-
-	// TODO: don't run a subloop, run the task fully asynchronously
-	task.polling = true;
-	while (task.polling)
-		poller_run (&poller);
-
-	if (task.result
-	 && task.result != CURLE_WRITE_ERROR)
-	{
-		error_set (e, "%s: %s", "download failed", task.curl.curl_error);
-		goto error_2;
-	}
-
-	long code;
-	char *type;
-	if ((res = curl_easy_getinfo (easy, CURLINFO_RESPONSE_CODE, &code))
-	 || (res = curl_easy_getinfo (easy, CURLINFO_CONTENT_TYPE, &type)))
-	{
-		error_set (e, "%s: %s",
-			"cURL info retrieval failed", curl_easy_strerror (res));
-		goto error_2;
-	}
-
-	if (code != 200)
-	{
-		error_set (e, "%s: %ld", "unexpected HTTP response code", code);
-		goto error_2;
-	}
-	if (type && content_type)
-		*content_type = xstrdup (type);
-
-	result = true;
-
-error_2:
-	hard_assert (poller_curl_remove (&pc, task.curl.easy, NULL));
-error_1:
-	curl_easy_cleanup (task.curl.easy);
-	poller_curl_free (&pc);
-
-	poller_free (&poller);
-	return result;
-}
 
 static bool
 is_content_type (const char *content_type,
@@ -1884,7 +1822,7 @@ is_content_type (const char *content_type,
 }
 
 static void
-parse_playlist (const char *playlist, const char *content_type,
+streams_tab_parse_playlist (const char *playlist, const char *content_type,
 	struct str_vector *out)
 {
 	// We accept a lot of very broken stuff because this is the real world
@@ -1924,33 +1862,145 @@ parse_playlist (const char *playlist, const char *content_type,
 }
 
 static bool
-streams_extract_links (const char *uri, struct str_vector *out,
-	struct error **e)
+streams_tab_extract_links (struct str *data, const char *content_type,
+	struct str_vector *out)
 {
-	struct str buf;
-	str_init (&buf);
-
-	bool success;
-	char *content_type = NULL;
-	if (!(success = app_download (uri, &buf, &content_type, e)))
-		goto error;
-
 	// Since playlists are also "audio/*", this seems like a sane thing to do
-	bool is_binary = false;
-	for (size_t i = 0; i < buf.len; i++)
+	for (size_t i = 0; i < data->len; i++)
 	{
-		uint8_t c = buf.str[i];
-		is_binary |= (c < 32) & (c != '\t') & (c != '\r') & (c != '\n');
+		uint8_t c = data->str[i];
+		if ((c < 32) & (c != '\t') & (c != '\r') & (c != '\n'))
+			return false;
 	}
-	if (is_binary)
-		str_vector_add (out, uri);
-	else
-		parse_playlist (buf.str, content_type, out);
-	free (content_type);
+
+	streams_tab_parse_playlist (data->str, content_type, out);
+	return true;
+}
+
+static void
+streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
+{
+	struct stream_tab_task *self =
+		CONTAINER_OF (task, struct stream_tab_task, curl);
+	self->polling = false;
+
+	if (msg->data.result
+	 && msg->data.result != CURLE_WRITE_ERROR)
+	{
+		print_error ("%s: %s", "download failed", self->curl.curl_error);
+		return;
+	}
+
+	struct mpd_client *c = &g_ctx.client;
+	if (c->state != MPD_CONNECTED)
+		return;
+
+	CURL *easy = msg->easy_handle;
+	CURLcode res;
+
+	long code;
+	char *type, *uri;
+	if ((res = curl_easy_getinfo (easy, CURLINFO_RESPONSE_CODE, &code))
+	 || (res = curl_easy_getinfo (easy, CURLINFO_CONTENT_TYPE, &type))
+	 || (res = curl_easy_getinfo (easy, CURLINFO_EFFECTIVE_URL, &uri)))
+	{
+		print_error ("%s: %s",
+			"cURL info retrieval failed", curl_easy_strerror (res));
+		return;
+	}
+	// cURL is not willing to parse the ICY header, the code is zero then
+	if (code && code != 200)
+	{
+		print_error ("%s: %ld", "unexpected HTTP response code", code);
+		return;
+	}
+
+	mpd_client_list_begin (c);
+
+	// FIXME: we also need to play it if we've been playing things already
+	if (self->replace)
+		mpd_client_send_command (c, "clear", NULL);
+
+	struct str_vector links;
+	str_vector_init (&links);
+
+	if (!streams_tab_extract_links (&self->data, type, &links))
+		str_vector_add (&links, uri);
+	for (size_t i = 0; i < links.len; i++)
+		mpd_client_send_command (c, "add", links.vector[i], NULL);
+
+	str_vector_free (&links);
+	mpd_client_list_end (c);
+	mpd_client_add_task (c, NULL, NULL);
+	mpd_client_idle (c, 0);
+}
+
+static size_t
+write_callback (char *ptr, size_t size, size_t nmemb, void *user_data)
+{
+	struct str *buf = user_data;
+	str_append_data (buf, ptr, size * nmemb);
+
+	// Invoke CURLE_WRITE_ERROR when we've received enough data for a playlist
+	if (buf->len >= (1 << 16))
+		return 0;
+
+	return size * nmemb;
+}
+
+static bool
+streams_tab_process (const char *uri, bool replace, struct error **e)
+{
+	struct poller poller;
+	poller_init (&poller);
+
+	struct poller_curl pc;
+	hard_assert (poller_curl_init (&pc, &poller, NULL));
+	struct stream_tab_task task;
+	hard_assert (poller_curl_spawn (&task.curl, NULL));
+
+	CURL *easy = task.curl.easy;
+	str_init (&task.data);
+	task.replace = replace;
+	bool result = false;
+
+	CURLcode res;
+	if ((res = curl_easy_setopt (easy, CURLOPT_FOLLOWLOCATION, 1L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_NOPROGRESS,     1L))
+	// TODO: make the timeout a bit larger once we're asynchronous
+	 || (res = curl_easy_setopt (easy, CURLOPT_TIMEOUT,        5L))
+	// Not checking anything, we just want some data, any data
+	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYPEER, 0L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYHOST, 0L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_URL,            uri))
+
+	 || (res = curl_easy_setopt (easy, CURLOPT_VERBOSE, (long) g_debug_mode))
+	 || (res = curl_easy_setopt (easy, CURLOPT_DEBUGFUNCTION,  print_curl_debug))
+	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEDATA,      &task.data))
+	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEFUNCTION,  write_callback)))
+	{
+		error_set (e, "%s: %s", "cURL setup failed", curl_easy_strerror (res));
+		goto error;
+	}
+
+	task.curl.on_done = streams_tab_on_downloaded;
+	hard_assert (poller_curl_add (&pc, task.curl.easy, NULL));
+
+	// TODO: don't run a subloop, run the task fully asynchronously
+	task.polling = true;
+	while (task.polling)
+		poller_run (&poller);
+
+	hard_assert (poller_curl_remove (&pc, task.curl.easy, NULL));
+	result = true;
 
 error:
-	str_free (&buf);
-	return success;
+	curl_easy_cleanup (task.curl.easy);
+	str_free (&task.data);
+	poller_curl_free (&pc);
+
+	poller_free (&poller);
+	return result;
 }
 
 static bool
@@ -1963,36 +2013,19 @@ streams_tab_on_action (enum user_action action)
 	// For simplicity the URL is the string following the stream name
 	const char *uri = 1 + strchr (g_ctx.streams.vector[self->item_selected], 0);
 
-	struct mpd_client *c = &g_ctx.client;
-	bool result = true;
+	// TODO: show any error to the user
 	switch (action)
 	{
 	case USER_ACTION_MPD_REPLACE:
-		// FIXME: we also need to play it if we've been playing things already
-		MPD_SIMPLE ("clear")
+		streams_tab_process (uri, true,  NULL);
+		return true;
 	case USER_ACTION_CHOOSE:
 	case USER_ACTION_MPD_ADD:
-	{
-		struct str_vector links;
-		str_vector_init (&links);
-
-		struct error *e = NULL;
-		if (!streams_extract_links (uri, &links, &e))
-		{
-			print_debug ("%s", e->message);
-			str_vector_add (&links, uri);
-		}
-
-		for (size_t i = 0; i < links.len; i++)
-			MPD_SIMPLE ("add", links.vector[i])
-
-		str_vector_free (&links);
-		break;
-	}
+		streams_tab_process (uri, false, NULL);
+		return true;
 	default:
-		result = false;
+		return false;
 	}
-	return result;
 }
 
 static void
