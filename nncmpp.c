@@ -142,6 +142,25 @@ clock_msec (clockid_t clock)
 	return (int64_t) tp.tv_sec * 1000 + (int64_t) tp.tv_nsec / 1000000;
 }
 
+static char *
+latin1_to_utf8 (const char *latin1)
+{
+	struct str converted;
+	str_init (&converted);
+	while (*latin1)
+	{
+		uint8_t c = *latin1++;
+		if (c < 0x80)
+			str_append_c (&converted, c);
+		else
+		{
+			str_append_c (&converted, 0xC0 | (c >> 6));
+			str_append_c (&converted, 0x80 | (c & 0x3F));
+		}
+	}
+	return str_steal (&converted);
+}
+
 // --- cURL async wrapper ------------------------------------------------------
 
 // You are meant to subclass this structure, no user_data pointers needed
@@ -1888,11 +1907,18 @@ parse_playlist (const char *playlist, const char *content_type,
 
 	regmatch_t groups[2];
 	for (size_t i = 0; i < lines.len; i++)
-	{
 		if (regexec (re, lines.vector[i], 2, groups, 0) != REG_NOMATCH)
-			str_vector_add (out, xstrndup (lines.vector[i] + groups[1].rm_so,
-				groups[1].rm_eo - groups[1].rm_so));
-	}
+		{
+			char *target = xstrndup (lines.vector[i] + groups[1].rm_so,
+				groups[1].rm_eo - groups[1].rm_so);
+			if (utf8_validate (target, strlen (target)))
+				str_vector_add_owned (out, target);
+			else
+			{
+				str_vector_add_owned (out, latin1_to_utf8 (target));
+				free (target);
+			}
+		}
 	regex_free (re);
 	str_vector_free (&lines);
 }
