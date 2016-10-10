@@ -521,6 +521,7 @@ static struct app_context
 	struct tab *help_tab;               ///< Special help tab
 	struct tab *tabs;                   ///< All other tabs
 	struct tab *active_tab;             ///< Active tab
+	struct tab *last_tab;               ///< Previous tab
 
 	// Emulated widgets:
 
@@ -1529,6 +1530,10 @@ app_prepend_tab (struct tab *tab)
 static void
 app_switch_tab (struct tab *tab)
 {
+	if (tab == g_ctx.active_tab)
+		return;
+
+	g_ctx.last_tab = g_ctx.active_tab;
 	g_ctx.active_tab = tab;
 	app_invalidate ();
 }
@@ -1553,6 +1558,8 @@ app_goto_tab (int tab_index)
 	\
 	XX( QUIT,               "Quit application"        ) \
 	XX( REDRAW,             "Redraw screen"           ) \
+	XX( HELP_TAB,           "Switch to the help tab"  ) \
+	XX( LAST_TAB,           "Switch to previous tab"  ) \
 	\
 	XX( MPD_PREVIOUS,       "Previous song"           ) \
 	XX( MPD_TOGGLE,         "Toggle play/pause"       ) \
@@ -1565,6 +1572,7 @@ app_goto_tab (int tab_index)
 	XX( MPD_REPLACE,     "Replace playlist with song" ) \
 	\
 	XX( CHOOSE,             "Choose item"             ) \
+	XX( DELETE,             "Delete item"             ) \
 	\
 	XX( SCROLL_UP,          "Scroll up"               ) \
 	XX( SCROLL_DOWN,        "Scroll down"             ) \
@@ -1624,6 +1632,14 @@ app_process_user_action (enum user_action action)
 	case USER_ACTION_REDRAW:
 		clear ();
 		app_invalidate ();
+		break;
+	case USER_ACTION_LAST_TAB:
+		if (!g_ctx.last_tab)
+			return false;
+		app_switch_tab (g_ctx.last_tab);
+		break;
+	case USER_ACTION_HELP_TAB:
+		app_switch_tab (g_ctx.help_tab);
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1826,7 +1842,10 @@ static struct binding
 g_default_bindings[] =
 {
 	{ "Escape",     USER_ACTION_QUIT               },
+	{ "q",          USER_ACTION_QUIT               },
 	{ "C-l",        USER_ACTION_REDRAW             },
+	{ "M-Tab",      USER_ACTION_LAST_TAB           },
+	{ "F1",         USER_ACTION_HELP_TAB           },
 
 	{ "Home",       USER_ACTION_GOTO_TOP           },
 	{ "End",        USER_ACTION_GOTO_BOTTOM        },
@@ -1845,6 +1864,7 @@ g_default_bindings[] =
 
 	// Not sure how to set these up, they're pretty arbitrary so far
 	{ "Enter",      USER_ACTION_CHOOSE             },
+	{ "Delete",     USER_ACTION_DELETE             },
 	{ "a",          USER_ACTION_MPD_ADD            },
 	{ "r",          USER_ACTION_MPD_REPLACE        },
 
@@ -1906,6 +1926,33 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 		(int) item_index == g_ctx.song ? A_BOLD : 0);
 }
 
+static bool
+current_tab_on_action (enum user_action action)
+{
+	struct tab *self = g_ctx.active_tab;
+	if (self->item_selected < 0)
+		return false;
+
+	struct mpd_client *c = &g_ctx.client;
+	switch (action)
+	{
+		char *song;
+	case USER_ACTION_CHOOSE:
+		song = xstrdup_printf ("%d", self->item_selected);
+		MPD_SIMPLE ("play", song)
+		free (song);
+		return true;
+	case USER_ACTION_DELETE:
+		song = xstrdup_printf ("%d", self->item_selected);
+		MPD_SIMPLE ("delete", song)
+		free (song);
+		return true;
+	default:
+		break;
+	}
+	return false;
+}
+
 static void
 current_tab_update (void)
 {
@@ -1918,6 +1965,7 @@ current_tab_init (void)
 {
 	struct tab *super = &g_current_tab.super;
 	tab_init (super, "Current");
+	super->on_action = current_tab_on_action;
 	super->on_item_draw = current_tab_on_item_draw;
 	return super;
 }
