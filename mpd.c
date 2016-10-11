@@ -509,15 +509,12 @@ static void
 mpd_client_on_timeout (void *user_data)
 {
 	struct mpd_client *self = user_data;
-	unsigned subsystems = self->idling_subsystems;
 
-	// Just sending this out should bring a dead connection down over TCP
-	// TODO: set another timer to make sure the ping reply arrives
-	mpd_client_send_command (self, "ping", NULL);
-	mpd_client_add_task (self, NULL, NULL);
-
-	// Restore the incriminating idle immediately
-	mpd_client_idle (self, subsystems);
+	// Abort and immediately restore the current idle so that MPD doesn't
+	// disconnect us, even though the documentation says this won't happen.
+	// Just sending this out should bring a dead connection down over TCP.
+	// TODO: set another timer to make sure we get a reply
+	mpd_client_idle (self, self->idling_subsystems);
 }
 
 /// When not expecting to send any further commands, you should call this
