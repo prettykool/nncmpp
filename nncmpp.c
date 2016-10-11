@@ -62,10 +62,8 @@ enum
 #define LIBERTY_WANT_POLLER
 #define LIBERTY_WANT_ASYNC
 #define LIBERTY_WANT_PROTO_HTTP
+#define LIBERTY_WANT_PROTO_MPD
 #include "liberty/liberty.c"
-
-#include <sys/un.h>
-#include "mpd.c"
 
 #include <locale.h>
 #include <termios.h>
@@ -2394,9 +2392,6 @@ debug_tab_init (void)
 }
 
 // --- MPD interface -----------------------------------------------------------
-
-// TODO: this entire thing has been slavishly copy-pasted from dwmstatus
-// TODO: try to move some of this code to mpd.c
 
 static void
 mpd_update_playback_state (void)
