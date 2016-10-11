@@ -1896,7 +1896,7 @@ app_process_termo_event (termo_key_t *event)
 	}
 
 	// TODO: parametrize actions, put this among other bindings
-	if (event->modifiers == TERMO_KEYMOD_ALT
+	if (!(event->modifiers & ~TERMO_KEYMOD_ALT)
 	 && event->code.codepoint >= '0'
 	 && event->code.codepoint <= '9')
 	{
