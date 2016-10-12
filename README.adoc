@@ -11,11 +11,11 @@ names, and should be pronounced as "nincompoop".
 
 Features
 --------
-Currently it's under development and doesn't show the music library yet.
+Currently it's still under development but it's already useful enough for me
+to use it exclusively.  Note that since I only use the filesystem browsing mode,
+that's also the only thing I care to implement for the time being.
 
-Since I only use the filesystem browsing mode, that's also the only thing
-I care to implement.  Anything else will have to be user-contributed while
-I focus on things that aren't worthless to me.
+image::nncmpp.png[align="center"]
 
 Packages
 --------
@@ -58,7 +58,7 @@ Create _~/.config/nncmpp/nncmpp.conf_ with contents like the following:
 
 ....
 settings = {
-	address    = "localhost"
+	address    = "localhost:6600"
 	password   = "<your password>"
 	root       = "~/Music"
 }
