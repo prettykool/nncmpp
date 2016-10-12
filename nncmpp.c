@@ -1994,6 +1994,7 @@ static void
 current_tab_update (void)
 {
 	g_current_tab.super.item_count = g_ctx.playlist.len;
+	app_fix_view_range ();
 	app_invalidate ();
 }
 
