@@ -2732,56 +2732,48 @@ mpd_update_playback_state (void)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
-mpd_init_response_map (struct str_map *map)
-{
-	str_map_init (map);
-	map->key_xfrm = tolower_ascii_strxfrm;
-	map->free = free;
-}
-
-static void
-mpd_process_info_chunk (struct str_map *map, char *file)
-{
-	unsigned long n;
-	if (!file)
-	{
-		if (xstrtoul_map (map, "playlistlength", &n))
-			item_list_resize (&g_ctx.playlist, n);
-		g_ctx.playback_info = *map;
-	}
-	else
-	{
-		if (xstrtoul_map (map, "pos", &n))
-			item_list_set (&g_ctx.playlist, n, map);
-		str_map_free (map);
-	}
-	mpd_init_response_map (map);
-}
-
-static void
 mpd_process_info (const struct str_vector *data)
 {
 	struct str_map map;
-	mpd_init_response_map (&map);
+	str_map_init (&map);
+	map.key_xfrm = tolower_ascii_strxfrm;
+	map.free = free;
 
-	// First there's the status, followed by playlist items chunked by "file"
-	char *key, *value, *file = NULL;
+	// First there's the status, followed by playlist items chunked by "file".
+	// Unfortunately we need a field from the front before we process the rest
+	// but otherwise it's much better to process the list from the back.
+	//
+	// TODO: one thing that could help is command_list_ok_begin,
+	//   which can add NULL strings to the vector in place of list_OK
+	unsigned long n;
 	for (size_t i = 0; i < data->len; i++)
+	{
+		static const char needle[] = "playlistlength: ";
+		if (!strncasecmp_ascii (data->vector[i], needle, sizeof needle - 1)
+		 && xstrtoul (&n, data->vector[i] + sizeof needle - 1, 10))
+		{
+			item_list_resize (&g_ctx.playlist, n);
+			break;
+		}
+	}
+
+	char *key, *value;
+	for (size_t i = data->len; i--; )
 	{
 		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
 		{
 			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
 			continue;
 		}
+		str_map_set (&map, key, xstrdup (value));
 		if (!strcasecmp_ascii (key, "file"))
 		{
-			mpd_process_info_chunk (&map, file);
-			file = value;
+			if (xstrtoul_map (&map, "pos", &n))
+				item_list_set (&g_ctx.playlist, n, &map);
+			str_map_clear (&map);
 		}
-		str_map_set (&map, key, xstrdup (value));
 	}
-	mpd_process_info_chunk (&map, file);
-	str_map_free (&map);
+	g_ctx.playback_info = map;
 }
 
 static void
