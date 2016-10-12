@@ -538,10 +538,10 @@ item_list_resize (struct item_list *self, size_t len)
 
 struct tab;
 struct row_buffer;
-enum user_action;
+enum action;
 
 /// Try to handle an action in the tab
-typedef bool (*tab_action_fn) (enum user_action action);
+typedef bool (*tab_action_fn) (enum action action);
 
 /// Draw an item to the screen using the row buffer API
 typedef void (*tab_item_draw_fn)
@@ -1590,7 +1590,7 @@ app_goto_tab (int tab_index)
 
 // --- User input handling -----------------------------------------------------
 
-#define USER_ACTIONS(XX) \
+#define ACTIONS(XX) \
 	XX( NONE,               "Do nothing"              ) \
 	\
 	XX( QUIT,               "Quit application"        ) \
@@ -1621,23 +1621,23 @@ app_goto_tab (int tab_index)
 	XX( GOTO_PAGE_PREVIOUS, "Go to the previous page" ) \
 	XX( GOTO_PAGE_NEXT,     "Go to the next page"     )
 
-enum user_action
+enum action
 {
-#define XX(name, description) USER_ACTION_ ## name,
-	USER_ACTIONS (XX)
+#define XX(name, description) ACTION_ ## name,
+	ACTIONS (XX)
 #undef XX
-	USER_ACTION_COUNT
+	ACTION_COUNT
 };
 
-static struct user_action_info
+static struct action_info
 {
 	const char *name;                   ///< Name for user bindings
 	const char *description;            ///< Human-readable description
 }
-g_user_actions[] =
+g_actions[] =
 {
 #define XX(name, description) { #name, description },
-	USER_ACTIONS (XX)
+	ACTIONS (XX)
 #undef XX
 };
 
@@ -1653,7 +1653,7 @@ g_user_actions[] =
 }
 
 static bool
-app_process_user_action (enum user_action action)
+app_process_action (enum action action)
 {
 	// First let the tab try to handle this
 	struct tab *tab = g_ctx.active_tab;
@@ -1663,39 +1663,39 @@ app_process_user_action (enum user_action action)
 	struct mpd_client *c = &g_ctx.client;
 	switch (action)
 	{
-	case USER_ACTION_QUIT:
+	case ACTION_QUIT:
 		app_quit ();
 		break;
-	case USER_ACTION_REDRAW:
+	case ACTION_REDRAW:
 		clear ();
 		app_invalidate ();
 		break;
-	case USER_ACTION_LAST_TAB:
+	case ACTION_LAST_TAB:
 		if (!g_ctx.last_tab)
 			return false;
 		app_switch_tab (g_ctx.last_tab);
 		break;
-	case USER_ACTION_HELP_TAB:
+	case ACTION_HELP_TAB:
 		app_switch_tab (g_ctx.help_tab);
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	case USER_ACTION_MPD_PREVIOUS:
+	case ACTION_MPD_PREVIOUS:
 		MPD_SIMPLE ("previous")
 		break;
-	case USER_ACTION_MPD_TOGGLE:
+	case ACTION_MPD_TOGGLE:
 		if      (g_ctx.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1")
 		else if (g_ctx.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0")
 		else                                    MPD_SIMPLE ("play")
 		break;
-	case USER_ACTION_MPD_STOP:
+	case ACTION_MPD_STOP:
 		MPD_SIMPLE ("stop")
 		break;
-	case USER_ACTION_MPD_NEXT:
+	case ACTION_MPD_NEXT:
 		MPD_SIMPLE ("next")
 		break;
-	case USER_ACTION_MPD_VOLUME_UP:
+	case ACTION_MPD_VOLUME_UP:
 		if (g_ctx.volume >= 0)
 		{
 			char *volume = xstrdup_printf ("%d", MIN (100, g_ctx.volume + 10));
@@ -1703,7 +1703,7 @@ app_process_user_action (enum user_action action)
 			free (volume);
 		}
 		break;
-	case USER_ACTION_MPD_VOLUME_DOWN:
+	case ACTION_MPD_VOLUME_DOWN:
 		if (g_ctx.volume >= 0)
 		{
 			char *volume = xstrdup_printf ("%d", MAX (0, g_ctx.volume - 10));
@@ -1721,14 +1721,14 @@ app_process_user_action (enum user_action action)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 		// XXX: these should rather be parametrized
-	case USER_ACTION_SCROLL_UP:
+	case ACTION_SCROLL_UP:
 		app_scroll (-3);
 		break;
-	case USER_ACTION_SCROLL_DOWN:
+	case ACTION_SCROLL_DOWN:
 		app_scroll (3);
 		break;
 
-	case USER_ACTION_GOTO_TOP:
+	case ACTION_GOTO_TOP:
 		if (tab->item_count)
 		{
 			g_ctx.active_tab->item_selected = 0;
@@ -1736,7 +1736,7 @@ app_process_user_action (enum user_action action)
 			app_invalidate ();
 		}
 		break;
-	case USER_ACTION_GOTO_BOTTOM:
+	case ACTION_GOTO_BOTTOM:
 		if (tab->item_count)
 		{
 			g_ctx.active_tab->item_selected =
@@ -1746,25 +1746,25 @@ app_process_user_action (enum user_action action)
 		}
 		break;
 
-	case USER_ACTION_GOTO_ITEM_PREVIOUS:
+	case ACTION_GOTO_ITEM_PREVIOUS:
 		app_move_selection (-1);
 		break;
-	case USER_ACTION_GOTO_ITEM_NEXT:
+	case ACTION_GOTO_ITEM_NEXT:
 		app_move_selection (1);
 		break;
 
-	case USER_ACTION_GOTO_PAGE_PREVIOUS:
+	case ACTION_GOTO_PAGE_PREVIOUS:
 		app_scroll ((int) g_ctx.header_height - LINES);
 		app_move_selection ((int) g_ctx.header_height - LINES);
 		break;
-	case USER_ACTION_GOTO_PAGE_NEXT:
+	case ACTION_GOTO_PAGE_NEXT:
 		app_scroll (LINES - (int) g_ctx.header_height);
 		app_move_selection (LINES - (int) g_ctx.header_height);
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	case USER_ACTION_NONE:
+	case ACTION_NONE:
 		break;
 	default:
 		beep ();
@@ -1782,14 +1782,14 @@ app_process_left_mouse_click (int line, int column)
 	{
 		// XXX: there could be a push_widget(buf, text, attrs, handler)
 		//   function to help with this but it might not be worth it
-		enum user_action action = USER_ACTION_NONE;
-		if (column >= 0 && column <=  1) action = USER_ACTION_MPD_PREVIOUS;
-		if (column >= 3 && column <=  4) action = USER_ACTION_MPD_TOGGLE;
-		if (column >= 6 && column <=  7) action = USER_ACTION_MPD_STOP;
-		if (column >= 9 && column <= 10) action = USER_ACTION_MPD_NEXT;
+		enum action action = ACTION_NONE;
+		if (column >= 0 && column <=  1) action = ACTION_MPD_PREVIOUS;
+		if (column >= 3 && column <=  4) action = ACTION_MPD_TOGGLE;
+		if (column >= 6 && column <=  7) action = ACTION_MPD_STOP;
+		if (column >= 9 && column <= 10) action = ACTION_MPD_NEXT;
 
 		if (action)
-			return app_process_user_action (action);
+			return app_process_action (action);
 
 		int gauge_offset = column - g_ctx.gauge_offset;
 		if (g_ctx.gauge_offset < 0
@@ -1863,9 +1863,9 @@ app_process_mouse (termo_key_t *event)
 	if (button == 1)
 		return app_process_left_mouse_click (line, column);
 	else if (button == 4)
-		return app_process_user_action (USER_ACTION_SCROLL_UP);
+		return app_process_action (ACTION_SCROLL_UP);
 	else if (button == 5)
-		return app_process_user_action (USER_ACTION_SCROLL_DOWN);
+		return app_process_action (ACTION_SCROLL_DOWN);
 	return false;
 }
 
@@ -1874,45 +1874,45 @@ app_process_mouse (termo_key_t *event)
 static struct binding
 {
 	const char *key;                    ///< Key definition
-	enum user_action action;            ///< Action to take
+	enum action action;                 ///< Action to take
 }
 g_default_bindings[] =
 {
-	{ "Escape",     USER_ACTION_QUIT               },
-	{ "q",          USER_ACTION_QUIT               },
-	{ "C-l",        USER_ACTION_REDRAW             },
-	{ "M-Tab",      USER_ACTION_LAST_TAB           },
-	{ "F1",         USER_ACTION_HELP_TAB           },
+	{ "Escape",     ACTION_QUIT               },
+	{ "q",          ACTION_QUIT               },
+	{ "C-l",        ACTION_REDRAW             },
+	{ "M-Tab",      ACTION_LAST_TAB           },
+	{ "F1",         ACTION_HELP_TAB           },
 
-	{ "Home",       USER_ACTION_GOTO_TOP           },
-	{ "End",        USER_ACTION_GOTO_BOTTOM        },
-	{ "M-<",        USER_ACTION_GOTO_TOP           },
-	{ "M->",        USER_ACTION_GOTO_BOTTOM        },
-	{ "Up",         USER_ACTION_GOTO_ITEM_PREVIOUS },
-	{ "Down",       USER_ACTION_GOTO_ITEM_NEXT     },
-	{ "k",          USER_ACTION_GOTO_ITEM_PREVIOUS },
-	{ "j",          USER_ACTION_GOTO_ITEM_NEXT     },
-	{ "PageUp",     USER_ACTION_GOTO_PAGE_PREVIOUS },
-	{ "PageDown",   USER_ACTION_GOTO_PAGE_NEXT     },
-	{ "C-p",        USER_ACTION_GOTO_ITEM_PREVIOUS },
-	{ "C-n",        USER_ACTION_GOTO_ITEM_NEXT     },
-	{ "C-b",        USER_ACTION_GOTO_PAGE_PREVIOUS },
-	{ "C-f",        USER_ACTION_GOTO_PAGE_NEXT     },
+	{ "Home",       ACTION_GOTO_TOP           },
+	{ "End",        ACTION_GOTO_BOTTOM        },
+	{ "M-<",        ACTION_GOTO_TOP           },
+	{ "M->",        ACTION_GOTO_BOTTOM        },
+	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS },
+	{ "Down",       ACTION_GOTO_ITEM_NEXT     },
+	{ "k",          ACTION_GOTO_ITEM_PREVIOUS },
+	{ "j",          ACTION_GOTO_ITEM_NEXT     },
+	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS },
+	{ "PageDown",   ACTION_GOTO_PAGE_NEXT     },
+	{ "C-p",        ACTION_GOTO_ITEM_PREVIOUS },
+	{ "C-n",        ACTION_GOTO_ITEM_NEXT     },
+	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
+	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
 
 	// Not sure how to set these up, they're pretty arbitrary so far
-	{ "Enter",      USER_ACTION_CHOOSE             },
-	{ "Delete",     USER_ACTION_DELETE             },
-	{ "a",          USER_ACTION_MPD_ADD            },
-	{ "r",          USER_ACTION_MPD_REPLACE        },
+	{ "Enter",      ACTION_CHOOSE             },
+	{ "Delete",     ACTION_DELETE             },
+	{ "a",          ACTION_MPD_ADD            },
+	{ "r",          ACTION_MPD_REPLACE        },
 
-	{ "Left",       USER_ACTION_MPD_PREVIOUS       },
-	{ "Right",      USER_ACTION_MPD_NEXT           },
-	{ "h",          USER_ACTION_MPD_PREVIOUS       },
-	{ "l",          USER_ACTION_MPD_NEXT           },
-	{ "Space",      USER_ACTION_MPD_TOGGLE         },
-	{ "C-Space",    USER_ACTION_MPD_STOP           },
-	{ "M-PageUp",   USER_ACTION_MPD_VOLUME_UP      },
-	{ "M-PageDown", USER_ACTION_MPD_VOLUME_DOWN    },
+	{ "Left",       ACTION_MPD_PREVIOUS       },
+	{ "Right",      ACTION_MPD_NEXT           },
+	{ "h",          ACTION_MPD_PREVIOUS       },
+	{ "l",          ACTION_MPD_NEXT           },
+	{ "Space",      ACTION_MPD_TOGGLE         },
+	{ "C-Space",    ACTION_MPD_STOP           },
+	{ "M-PageUp",   ACTION_MPD_VOLUME_UP      },
+	{ "M-PageDown", ACTION_MPD_VOLUME_DOWN    },
 };
 
 static bool
@@ -1929,7 +1929,7 @@ app_process_termo_event (termo_key_t *event)
 		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk, binding->key, &key,
 			TERMO_FORMAT_ALTISMETA));
 		if (!termo_keycmp (g_ctx.tk, event, &key))
-			return app_process_user_action (binding->action);
+			return app_process_action (binding->action);
 	}
 
 	// TODO: parametrize actions, put this among other bindings
@@ -1964,7 +1964,7 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 }
 
 static bool
-current_tab_on_action (enum user_action action)
+current_tab_on_action (enum action action)
 {
 	struct tab *self = g_ctx.active_tab;
 	if (self->item_selected < 0)
@@ -1974,12 +1974,12 @@ current_tab_on_action (enum user_action action)
 	switch (action)
 	{
 		char *song;
-	case USER_ACTION_CHOOSE:
+	case ACTION_CHOOSE:
 		song = xstrdup_printf ("%d", self->item_selected);
 		MPD_SIMPLE ("play", song)
 		free (song);
 		return true;
-	case USER_ACTION_DELETE:
+	case ACTION_DELETE:
 		song = xstrdup_printf ("%d", self->item_selected);
 		MPD_SIMPLE ("delete", song)
 		free (song);
@@ -2170,7 +2170,7 @@ library_tab_reload (const char *new_path)
 }
 
 static bool
-library_tab_on_action (enum user_action action)
+library_tab_on_action (enum action action)
 {
 	struct tab *self = g_ctx.active_tab;
 	if (self->item_selected < 0)
@@ -2186,7 +2186,7 @@ library_tab_on_action (enum user_action action)
 
 	switch (action)
 	{
-	case USER_ACTION_CHOOSE:
+	case ACTION_CHOOSE:
 		switch (type)
 		{
 		case LIBRARY_ROOT: library_tab_reload ("");        break;
@@ -2209,7 +2209,7 @@ library_tab_on_action (enum user_action action)
 		default:           hard_assert (!"invalid item type");
 		}
 		return true;
-	case USER_ACTION_MPD_REPLACE:
+	case ACTION_MPD_REPLACE:
 		// FIXME: we also need to play it if we've been playing things already
 		if (type == LIBRARY_DIR || type == LIBRARY_FILE)
 		{
@@ -2218,7 +2218,7 @@ library_tab_on_action (enum user_action action)
 			return true;
 		}
 		return false;
-	case USER_ACTION_MPD_ADD:
+	case ACTION_MPD_ADD:
 		if (type == LIBRARY_DIR || type == LIBRARY_FILE)
 		{
 			MPD_SIMPLE ("add", item_path)
@@ -2452,7 +2452,7 @@ error:
 }
 
 static bool
-streams_tab_on_action (enum user_action action)
+streams_tab_on_action (enum action action)
 {
 	struct tab *self = g_ctx.active_tab;
 	if (self->item_selected < 0)
@@ -2464,11 +2464,11 @@ streams_tab_on_action (enum user_action action)
 	// TODO: show any error to the user
 	switch (action)
 	{
-	case USER_ACTION_MPD_REPLACE:
+	case ACTION_MPD_REPLACE:
 		streams_tab_process (uri, true,  NULL);
 		return true;
-	case USER_ACTION_CHOOSE:
-	case USER_ACTION_MPD_ADD:
+	case ACTION_CHOOSE:
+	case ACTION_MPD_ADD:
 		streams_tab_process (uri, false, NULL);
 		return true;
 	default:
@@ -2578,7 +2578,7 @@ help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	hard_assert (item_index < N_ELEMENTS (g_default_bindings));
 	struct binding *binding = &g_default_bindings[item_index];
 	char *text = xstrdup_printf ("%-12s %s",
-		binding->key, g_user_actions[binding->action].description);
+		binding->key, g_actions[binding->action].description);
 	row_buffer_append (buffer, text, 0);
 	free (text);
 }
