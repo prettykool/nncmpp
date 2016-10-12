@@ -2080,23 +2080,23 @@ library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	}
 }
 
-static void
-library_tab_chunk (struct str_map *map)
+static char
+library_tab_header_type (const char *key)
 {
-	char *id, type;
-	if ((id = str_map_find (map, "directory")))
-		type = LIBRARY_DIR;
-	else if ((id = str_map_find (map, "file")))
-		type = LIBRARY_FILE;
-	else
-		return;
+	if (!strcasecmp_ascii (key, "file"))      return LIBRARY_FILE;
+	if (!strcasecmp_ascii (key, "directory")) return LIBRARY_DIR;
+	return 0;
+}
 
+static void
+library_tab_chunk (char type, const char *path, struct str_map *map)
+{
 	const char *artist = str_map_find (map, "artist");
 	const char *title  = str_map_find (map, "title");
 	char *name = (artist && title)
 		? xstrdup_printf ("%s - %s", artist, title)
-		: xstrdup (xbasename (id));
-	library_tab_add (type, name, id);
+		: xstrdup (xbasename (path));
+	library_tab_add (type, name, path);
 	free (name);
 }
 
@@ -2143,23 +2143,17 @@ library_tab_on_data (const struct mpd_response *response,
 	str_map_init (&map);
 	map.key_xfrm = tolower_ascii_strxfrm;
 
-	char *key, *value;
-	for (size_t i = 0; i < data->len; i++)
-	{
+	char *key, *value, type;
+	for (size_t i = data->len; i--; )
 		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
-		{
 			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
-			continue;
-		}
-		if (!strcasecmp_ascii (key, "file")
-		 || !strcasecmp_ascii (key, "directory"))
+		else if (!(type = library_tab_header_type (key)))
+			str_map_set (&map, key, value);
+		else
 		{
-			library_tab_chunk (&map);
+			library_tab_chunk (type, value, &map);
 			str_map_clear (&map);
 		}
-		str_map_set (&map, key, value);
-	}
-	library_tab_chunk (&map);
 	str_map_free (&map);
 
 	struct str_vector *items = &g_library_tab.items;
