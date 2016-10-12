@@ -147,6 +147,13 @@ xstrtoul_map (const struct str_map *map, const char *key, unsigned long *out)
 	return field && xstrtoul (out, field, 10);
 }
 
+static const char *
+xbasename (const char *path)
+{
+	const char *last_slash = strrchr (path, '/');
+	return last_slash ? last_slash + 1 : path;
+}
+
 static char *
 latin1_to_utf8 (const char *latin1)
 {
@@ -2010,6 +2017,14 @@ current_tab_init (void)
 
 // --- Library tab -------------------------------------------------------------
 
+static struct
+{
+	struct tab super;                   ///< Parent class
+	struct str path;                    ///< Current path
+	struct str_vector items;            ///< Current items (type, name, path)
+}
+g_library_tab;
+
 enum
 {
 	// This list is also ordered by ASCII and important for sorting
@@ -2020,33 +2035,12 @@ enum
 	LIBRARY_FILE = 'f'                  ///< File
 };
 
-static struct
+struct library_tab_item
 {
-	struct tab super;                   ///< Parent class
-	struct str path;                    ///< Current path
-	struct str_vector items;            ///< Current items (type, name, path)
-}
-g_library_tab;
-
-static void
-library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
-	int width)
-{
-	(void) width;
-	hard_assert (item_index < g_library_tab.items.len);
-
-	const char *item = g_library_tab.items.vector[item_index];
-	char type = *item++;
-
-	switch (type)
-	{
-	case LIBRARY_ROOT: row_buffer_append (buffer, "/",   0); break;
-	case LIBRARY_UP:   row_buffer_append (buffer, "/..", 0); break;
-	case LIBRARY_DIR:  row_buffer_addv (buffer, "/", 0, item, 0, NULL); break;
-	case LIBRARY_FILE: row_buffer_addv (buffer, " ", 0, item, 0, NULL); break;
-	default:           hard_assert (!"invalid item type");
-	}
-}
+	int type;                           ///< Type of the item
+	const char *name;                   ///< Visible name
+	const char *path;                   ///< MPD path
+};
 
 static void
 library_tab_add (int type, const char *name, const char *path)
@@ -2055,43 +2049,68 @@ library_tab_add (int type, const char *name, const char *path)
 		xstrdup_printf ("%c%s%c%s", type, name, 0, path));
 }
 
+static struct library_tab_item
+library_tab_resolve (const char *raw)
+{
+	struct library_tab_item item;
+	item.type = *raw++;
+	item.name = raw;
+	item.path = strchr (raw, '\0') + 1;
+	return item;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
+	int width)
+{
+	(void) width;
+	hard_assert (item_index < g_library_tab.items.len);
+
+	struct library_tab_item x =
+		library_tab_resolve (g_library_tab.items.vector[item_index]);
+	switch (x.type)
+	{
+	case LIBRARY_ROOT: row_buffer_append (buffer, "/",   0); break;
+	case LIBRARY_UP:   row_buffer_append (buffer, "/..", 0); break;
+	case LIBRARY_DIR:  row_buffer_addv (buffer, "/", 0, x.name, 0, NULL); break;
+	case LIBRARY_FILE: row_buffer_addv (buffer, " ", 0, x.name, 0, NULL); break;
+	default:           hard_assert (!"invalid item type");
+	}
+}
+
 static void
 library_tab_chunk (struct str_map *map)
 {
-	if (!map->len)
+	char *id, type;
+	if ((id = str_map_find (map, "directory")))
+		type = LIBRARY_DIR;
+	else if ((id = str_map_find (map, "file")))
+		type = LIBRARY_FILE;
+	else
 		return;
 
 	const char *artist = str_map_find (map, "artist");
 	const char *title  = str_map_find (map, "title");
 	char *name = (artist && title)
 		? xstrdup_printf ("%s - %s", artist, title)
-		: NULL;
-
-	char *id, type;
-	if ((id = str_map_find (map, "directory")))
-		type = LIBRARY_DIR;
-	else if ((id = str_map_find (map, "file")))
-		type = LIBRARY_FILE;
-
-	const char *last_slash = strrchr (id, '/');
-	const char *base = last_slash ? last_slash + 1 : id;
-	library_tab_add (type, name ? name : base, id);
+		: xstrdup (xbasename (id));
+	library_tab_add (type, name, id);
 	free (name);
 }
 
 static int
 library_tab_compare (char **a, char **b)
 {
-	char *item_a = *a; char type_a = *item_a++;
-	char *item_b = *b; char type_b = *item_b++;
-	char *path_a = strchr (item_a, '\0') + 1;
-	char *path_b = strchr (item_b, '\0') + 1;
+	struct library_tab_item xa = library_tab_resolve (*a);
+	struct library_tab_item xb = library_tab_resolve (*b);
 
-	if (type_a != type_b)
-		return type_a - type_b;
+	if (xa.type != xb.type)
+		return xa.type - xb.type;
 
 	// TODO: this should be case insensitive
-	return u8_strcmp ((uint8_t *) path_a, (uint8_t *) path_b);
+	return u8_strcmp ((uint8_t *) xa.path, (uint8_t *) xb.path);
 }
 
 static void
@@ -2103,10 +2122,21 @@ library_tab_on_data (const struct mpd_response *response,
 		return;
 
 	str_vector_reset (&g_library_tab.items);
-	if (g_library_tab.path.len)
+
+	struct str *path = &g_library_tab.path;
+	if (path->len)
 	{
 		library_tab_add (LIBRARY_ROOT, "", "");
-		library_tab_add (LIBRARY_UP,   "", "");
+
+		char *last_slash;
+		if ((last_slash = strrchr (path->str, '/')))
+		{
+			char *up = xstrndup (path->str, last_slash - path->str);
+			library_tab_add (LIBRARY_UP, "", up);
+			free (up);
+		}
+		else
+			library_tab_add (LIBRARY_UP, "", "");
 	}
 
 	struct str_map map;
@@ -2144,27 +2174,19 @@ library_tab_on_data (const struct mpd_response *response,
 	app_invalidate ();
 }
 
-static const char *
-library_tab_path (void)
-{
-	struct str *path = &g_library_tab.path;
-	return path->len ? path->str : "/";
-}
-
 static void
 library_tab_reload (const char *new_path)
 {
 	// TODO: actually we should update the path _after_ we receive data
+	struct str *path = &g_library_tab.path;
 	if (new_path)
 	{
-		struct str *path = &g_library_tab.path;
 		str_reset (path);
 		str_append (path, new_path);
 	}
 
 	struct mpd_client *c = &g_ctx.client;
-	mpd_client_send_command (c, "lsinfo", library_tab_path (), NULL);
-
+	mpd_client_send_command (c, "lsinfo", path->len ? path->str : "/", NULL);
 	mpd_client_add_task (c, library_tab_on_data, NULL);
 	mpd_client_idle (c, 0);
 }
@@ -2180,51 +2202,34 @@ library_tab_on_action (enum action action)
 	if (c->state != MPD_CONNECTED)
 		return false;
 
-	char *item = g_library_tab.items.vector[self->item_selected];
-	char type = *item++;
-	const char *item_path = strchr (item, '\0') + 1;
-
+	struct library_tab_item x =
+		library_tab_resolve (g_library_tab.items.vector[self->item_selected]);
 	switch (action)
 	{
 	case ACTION_CHOOSE:
-		switch (type)
+		switch (x.type)
 		{
-		case LIBRARY_ROOT: library_tab_reload ("");        break;
+		case LIBRARY_ROOT:
 		case LIBRARY_UP:
-		{
-			struct str *path = &g_library_tab.path;
-			char *last_slash = strrchr (path->str, '/');
-			if (last_slash)
-			{
-				char *new_path = xstrndup (path->str, last_slash - path->str);
-				library_tab_reload (new_path);
-				free (new_path);
-			}
-			else
-				library_tab_reload ("");
-			break;
-		}
-		case LIBRARY_DIR:  library_tab_reload (item_path); break;
-		case LIBRARY_FILE: MPD_SIMPLE ("add", item_path)   break;
+		case LIBRARY_DIR:  library_tab_reload (x.path); break;
+		case LIBRARY_FILE: MPD_SIMPLE ("add", x.path)   break;
 		default:           hard_assert (!"invalid item type");
 		}
 		return true;
 	case ACTION_MPD_REPLACE:
 		// FIXME: we also need to play it if we've been playing things already
-		if (type == LIBRARY_DIR || type == LIBRARY_FILE)
-		{
-			MPD_SIMPLE ("clear");
-			MPD_SIMPLE ("add", item_path)
-			return true;
-		}
-		return false;
+		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
+			break;
+
+		MPD_SIMPLE ("clear");
+		MPD_SIMPLE ("add", x.path)
+		return true;
 	case ACTION_MPD_ADD:
-		if (type == LIBRARY_DIR || type == LIBRARY_FILE)
-		{
-			MPD_SIMPLE ("add", item_path)
-			return true;
-		}
-		break;
+		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
+			break;
+
+		MPD_SIMPLE ("add", x.path)
+		return true;
 	default:
 		break;
 	}
