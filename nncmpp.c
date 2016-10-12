@@ -407,6 +407,119 @@ poller_curl_remove (struct poller_curl *self, CURL *easy, struct error **e)
 	return true;
 }
 
+// --- Compact map -------------------------------------------------------------
+
+// MPD provides us with a hefty amount of little key-value maps.  The overhead
+// of str_map for such constant (string -> string) maps is too high and it's
+// much better to serialize them (mainly cache locality and memory efficiency).
+//
+// This isn't intended to be reusable and has case insensitivity built-in.
+
+typedef uint8_t *compact_map_t;         ///< Compacted (string -> string) map
+
+static compact_map_t
+compact_map (struct str_map *map)
+{
+	struct str s;
+	str_init (&s);
+	struct str_map_iter iter;
+	str_map_iter_init (&iter, map);
+
+	char *value;
+	static const size_t zero = 0, alignment = sizeof zero;
+	while ((value = str_map_iter_next (&iter)))
+	{
+		size_t entry_len = iter.link->key_length + 1 + strlen (value) + 1;
+		size_t padding_len = (alignment - entry_len % alignment) % alignment;
+		entry_len += padding_len;
+
+		str_append_data (&s, &entry_len, sizeof entry_len);
+		str_append_printf (&s, "%s%c%s%c", iter.link->key, 0, value, 0);
+		str_append_data (&s, &zero, padding_len);
+	}
+	str_append_data (&s, &zero, sizeof zero);
+	return (compact_map_t) str_steal (&s);
+}
+
+static char *
+compact_map_find (compact_map_t data, const char *needle)
+{
+	size_t entry_len;
+	while ((entry_len = *(size_t *) data))
+	{
+		data += sizeof entry_len;
+		if (!strcasecmp_ascii (needle, (const char *) data))
+			return (char *) data + strlen (needle) + 1;
+		data += entry_len;
+	}
+	return NULL;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+struct item_list
+{
+	compact_map_t *items;               ///< Compacted (string -> string) maps
+	size_t len;                         ///< Length
+	size_t alloc;                       ///< Allocated items
+};
+
+static void
+item_list_init (struct item_list *self)
+{
+	memset (self, 0, sizeof *self);
+	self->items = xcalloc (sizeof *self->items, (self->alloc = 16));
+}
+
+static void
+item_list_free (struct item_list *self)
+{
+	for (size_t i = 0; i < self->len; i++)
+		free (self->items[i]);
+	free (self->items);
+}
+
+static bool
+item_list_set (struct item_list *self, int i, struct str_map *item)
+{
+	if (i < 0 || (size_t) i >= self->len)
+		return false;
+
+	free (self->items[i]);
+	self->items[i] = compact_map (item);
+	return true;
+}
+
+static compact_map_t
+item_list_get (struct item_list *self, int i)
+{
+	if (i < 0 || (size_t) i >= self->len || !self->items[i])
+		return false;
+	return self->items[i];
+}
+
+static void
+item_list_resize (struct item_list *self, size_t len)
+{
+	// Make the allocated array big enough but not too large
+	size_t new_alloc = self->alloc;
+	while (new_alloc < len)
+		new_alloc <<= 1;
+	while ((new_alloc >> 1) >= len
+		&& (new_alloc - len) >= 1024)
+		new_alloc >>= 1;
+
+	for (size_t i = len; i < self->len; i++)
+		free (self->items[i]);
+	if (new_alloc != self->alloc)
+		self->items = xreallocarray (self->items,
+			sizeof *self->items, (self->alloc = new_alloc));
+	for (size_t i = self->len; i < len; i++)
+		self->items[i] = NULL;
+
+	self->len = len;
+}
+
 // --- Application -------------------------------------------------------------
 
 // Function names are prefixed mostly because of curses which clutters the
@@ -460,13 +573,6 @@ struct tab
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-struct playlist
-{
-	struct str_map *items;              ///< Current playlist
-	size_t len;                         ///< Length
-	size_t alloc;                       ///< Allocated items
-};
-
 struct attrs
 {
 	short fg;                           ///< Foreground colour index
@@ -508,7 +614,7 @@ static struct app_context
 	int song_duration;                  ///< Song duration in seconds
 	int volume;                         ///< Current volume
 
-	struct playlist playlist;           ///< Current playlist
+	struct item_list playlist;          ///< Current playlist
 	uint32_t playlist_version;          ///< Playlist version
 
 	// Data:
@@ -564,68 +670,6 @@ static void
 tab_free (struct tab *self)
 {
 	free (self->name);
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-static void
-playlist_init (struct playlist *self)
-{
-	memset (self, 0, sizeof *self);
-	self->items = xcalloc (sizeof *self->items, (self->alloc = 16));
-}
-
-static void
-playlist_free (struct playlist *self)
-{
-	for (size_t i = 0; i < self->len; i++)
-		str_map_free (&self->items[i]);
-	free (self->items);
-}
-
-static bool
-playlist_set (struct playlist *self, int i, struct str_map *item)
-{
-	if (i < 0 || (size_t) i >= self->len)
-		return false;
-
-	str_map_free (&self->items[i]);
-	self->items[i] = *item;
-	return true;
-}
-
-static struct str_map *
-playlist_get (struct playlist *self, int i)
-{
-	if (i < 0 || (size_t) i >= self->len)
-		return false;
-
-	return &self->items[i];
-}
-
-static void
-playlist_resize (struct playlist *self, size_t len)
-{
-	// Make the allocated array big enough but not too large
-	size_t new_alloc = self->alloc;
-	while (new_alloc < len)
-		new_alloc <<= 1;
-	while (len < (new_alloc >> 2)
-		&& new_alloc >= (STR_MAP_MIN_ALLOC << 1))
-		new_alloc >>= 1;
-
-	// Dispose of items that are out of range and resize the array if needed
-	for (size_t i = len; i < self->len; i++)
-		str_map_free (&self->items[i]);
-	if (new_alloc != self->alloc)
-		self->items = xreallocarray (self->items,
-			sizeof *self->items, new_alloc);
-
-	// We need to initialize placeholders so that str_map_find() succeeds
-	for (size_t i = self->len; i < len; i++)
-		str_map_init (&self->items[i]);
-
-	self->len = len;
 }
 
 // --- Configuration -----------------------------------------------------------
@@ -746,12 +790,8 @@ load_config_streams (struct config_item *subtree, void *user_data)
 			print_warning ("`%s': stream URIs must be strings", iter.link->key);
 		else
 		{
-			struct str s;
-			str_init (&s);
-			str_append (&s, iter.link->key);
-			str_append_c (&s, '\0');
-			str_append_str (&s, &item->value.string);
-			str_vector_add_owned (&g_ctx.streams, str_steal (&s));
+			str_vector_add_owned (&g_ctx.streams, xstrdup_printf ("%s%c%s",
+				iter.link->key, 0, item->value.string.str));
 		}
 	qsort (g_ctx.streams.vector, g_ctx.streams.len,
 		sizeof *g_ctx.streams.vector, str_vector_sort_utf8_cb);
@@ -809,7 +849,7 @@ app_init_context (void)
 	mpd_client_init (&g_ctx.client, &g_ctx.poller);
 	config_init (&g_ctx.config);
 	str_vector_init (&g_ctx.streams);
-	playlist_init (&g_ctx.playlist);
+	item_list_init (&g_ctx.playlist);
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
@@ -862,7 +902,7 @@ app_free_context (void)
 	mpd_client_free (&g_ctx.client);
 	str_map_free (&g_ctx.playback_info);
 	str_vector_free (&g_ctx.streams);
-	playlist_free (&g_ctx.playlist);
+	item_list_free (&g_ctx.playlist);
 
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
@@ -1112,9 +1152,8 @@ app_flush_header (struct row_buffer *buf, chtype attrs)
 static void
 app_draw_song_info (void)
 {
-	struct str_map *map;
-	if (!(map = playlist_get (&g_ctx.playlist, g_ctx.song))
-	 || !soft_assert (map->len != 0))
+	compact_map_t map;
+	if (!(map = item_list_get (&g_ctx.playlist, g_ctx.song)))
 		return;
 
 	// XXX: can we get rid of this and still make it look acceptable?
@@ -1122,9 +1161,9 @@ app_draw_song_info (void)
 	chtype a_highlight = APP_ATTR (HIGHLIGHT);
 
 	char *title;
-	if ((title = str_map_find (map, "title"))
-	 || (title = str_map_find (map, "name"))
-	 || (title = str_map_find (map, "file")))
+	if ((title = compact_map_find (map, "title"))
+	 || (title = compact_map_find (map, "name"))
+	 || (title = compact_map_find (map, "file")))
 	{
 		struct row_buffer buf;
 		row_buffer_init (&buf);
@@ -1132,8 +1171,8 @@ app_draw_song_info (void)
 		app_flush_header (&buf, a_highlight);
 	}
 
-	char *artist = str_map_find (map, "artist");
-	char *album  = str_map_find (map, "album");
+	char *artist = compact_map_find (map, "artist");
+	char *album  = compact_map_find (map, "album");
 	if (!artist && !album)
 		return;
 
@@ -1919,8 +1958,8 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	int width)
 {
 	// TODO: better output
-	struct str_map *map = playlist_get (&g_ctx.playlist, item_index);
-	row_buffer_append (buffer, str_map_find (map, "file"),
+	compact_map_t map = item_list_get (&g_ctx.playlist, item_index);
+	row_buffer_append (buffer, compact_map_find (map, "file"),
 		(int) item_index == g_ctx.song ? A_BOLD : 0);
 }
 
@@ -2249,9 +2288,9 @@ info_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 }
 
 static void
-info_tab_add (struct str_map *map, const char *field)
+info_tab_add (compact_map_t data, const char *field)
 {
-	const char *value = str_map_find (map, field);
+	const char *value = compact_map_find (data, field);
 	if (!value) value = "";
 
 	str_vector_add (&g_info_tab.keys, field);
@@ -2266,8 +2305,8 @@ info_tab_update (void)
 	str_vector_reset (&g_info_tab.values);
 	g_info_tab.super.item_count = 0;
 
-	struct str_map *map;
-	if ((map = playlist_get (&g_ctx.playlist, g_ctx.song)))
+	compact_map_t map;
+	if ((map = item_list_get (&g_ctx.playlist, g_ctx.song)))
 	{
 		info_tab_add (map, "Title");
 		info_tab_add (map, "Artist");
@@ -2471,13 +2510,15 @@ mpd_process_info_chunk (struct str_map *map, char *file)
 	if (!file)
 	{
 		if (xstrtoul_map (map, "playlistlength", &n))
-			playlist_resize (&g_ctx.playlist, n);
+			item_list_resize (&g_ctx.playlist, n);
 		g_ctx.playback_info = *map;
 	}
-	else if (!xstrtoul_map (map, "pos", &n)
-		|| !playlist_set (&g_ctx.playlist, n, map))
+	else
+	{
+		if (xstrtoul_map (map, "pos", &n))
+			item_list_set (&g_ctx.playlist, n, map);
 		str_map_free (map);
-
+	}
 	mpd_init_response_map (map);
 }
 
