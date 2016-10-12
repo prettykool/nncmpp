@@ -209,6 +209,14 @@ print_curl_debug (CURL *easy, curl_infotype type, char *data, size_t len,
 	return 0;
 }
 
+static char *
+mpd_parse_kv (char *line, char **value)
+{
+	char *key = mpd_client_parse_kv (line, value);
+	if (!key)  print_debug ("%s: %s", "erroneous MPD output", line);
+	return key;
+}
+
 // --- cURL async wrapper ------------------------------------------------------
 
 // You are meant to subclass this structure, no user_data pointers needed
@@ -2145,8 +2153,8 @@ library_tab_on_data (const struct mpd_response *response,
 
 	char *key, *value, type;
 	for (size_t i = data->len; i--; )
-		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
-			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+		if (!(key = mpd_parse_kv (data->vector[i], &value)))
+			continue;
 		else if (!(type = library_tab_header_type (key)))
 			str_map_set (&map, key, value);
 		else
@@ -2743,11 +2751,8 @@ mpd_process_info (const struct str_vector *data)
 	unsigned long n; char *key, *value;
 	for (size_t i = 0; i < data->len - 1 && data->vector[i]; i++)
 	{
-		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
-		{
-			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+		if (!(key = mpd_parse_kv (data->vector[i], &value)))
 			continue;
-		}
 		if (!strcasecmp_ascii (key, "playlistlength")
 			&& xstrtoul (&n, value, 10))
 			item_list_resize (&g_ctx.playlist, n);
@@ -2760,11 +2765,8 @@ mpd_process_info (const struct str_vector *data)
 	map.key_xfrm = tolower_ascii_strxfrm;
 	for (size_t i = data->len - 1; i-- && data->vector[i]; )
 	{
-		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
-		{
-			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+		if (!(key = mpd_parse_kv (data->vector[i], &value)))
 			continue;
-		}
 		str_map_set (&map, key, value);
 		if (!strcasecmp_ascii (key, "file"))
 		{
