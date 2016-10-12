@@ -2008,6 +2008,242 @@ current_tab_init (void)
 	return super;
 }
 
+// --- Library tab -------------------------------------------------------------
+
+enum
+{
+	// This list is also ordered by ASCII and important for sorting
+
+	LIBRARY_ROOT = '/',                 ///< Root entry
+	LIBRARY_UP   = '^',                 ///< Upper directory
+	LIBRARY_DIR  = 'd',                 ///< Directory
+	LIBRARY_FILE = 'f'                  ///< File
+};
+
+static struct
+{
+	struct tab super;                   ///< Parent class
+	struct str path;                    ///< Current path
+	struct str_vector items;            ///< Current items (type, name, path)
+}
+g_library_tab;
+
+static void
+library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
+	int width)
+{
+	(void) width;
+	hard_assert (item_index < g_library_tab.items.len);
+
+	const char *item = g_library_tab.items.vector[item_index];
+	char type = *item++;
+
+	switch (type)
+	{
+	case LIBRARY_ROOT: row_buffer_append (buffer, "/",   0); break;
+	case LIBRARY_UP:   row_buffer_append (buffer, "/..", 0); break;
+	case LIBRARY_DIR:  row_buffer_addv (buffer, "/", 0, item, 0, NULL); break;
+	case LIBRARY_FILE: row_buffer_addv (buffer, " ", 0, item, 0, NULL); break;
+	default:           hard_assert (!"invalid item type");
+	}
+}
+
+static void
+library_tab_add (int type, const char *name, const char *path)
+{
+	str_vector_add_owned (&g_library_tab.items,
+		xstrdup_printf ("%c%s%c%s", type, name, 0, path));
+}
+
+static void
+library_tab_chunk (struct str_map *map)
+{
+	if (!map->len)
+		return;
+
+	const char *artist = str_map_find (map, "artist");
+	const char *title  = str_map_find (map, "title");
+	char *name = (artist && title)
+		? xstrdup_printf ("%s - %s", artist, title)
+		: NULL;
+
+	char *id, type;
+	if ((id = str_map_find (map, "directory")))
+		type = LIBRARY_DIR;
+	else if ((id = str_map_find (map, "file")))
+		type = LIBRARY_FILE;
+
+	const char *last_slash = strrchr (id, '/');
+	const char *base = last_slash ? last_slash + 1 : id;
+	library_tab_add (type, name ? name : base, id);
+	free (name);
+}
+
+static int
+library_tab_compare (char **a, char **b)
+{
+	char *item_a = *a; char type_a = *item_a++;
+	char *item_b = *b; char type_b = *item_b++;
+	char *path_a = strchr (item_a, '\0') + 1;
+	char *path_b = strchr (item_b, '\0') + 1;
+
+	if (type_a != type_b)
+		return type_a - type_b;
+
+	// TODO: this should be case insensitive
+	return u8_strcmp ((uint8_t *) path_a, (uint8_t *) path_b);
+}
+
+static void
+library_tab_on_data (const struct mpd_response *response,
+	const struct str_vector *data, void *user_data)
+{
+	(void) user_data;
+	if (!response->success)
+		return;
+
+	str_vector_reset (&g_library_tab.items);
+	if (g_library_tab.path.len)
+	{
+		library_tab_add (LIBRARY_ROOT, "", "");
+		library_tab_add (LIBRARY_UP,   "", "");
+	}
+
+	struct str_map map;
+	str_map_init (&map);
+	map.key_xfrm = tolower_ascii_strxfrm;
+
+	char *key, *value;
+	for (size_t i = 0; i < data->len; i++)
+	{
+		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
+		{
+			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+			continue;
+		}
+		if (!strcasecmp_ascii (key, "file")
+		 || !strcasecmp_ascii (key, "directory"))
+		{
+			library_tab_chunk (&map);
+			str_map_clear (&map);
+		}
+		str_map_set (&map, key, value);
+	}
+	library_tab_chunk (&map);
+	str_map_free (&map);
+
+	struct str_vector *items = &g_library_tab.items;
+	qsort (items->vector, items->len, sizeof *items->vector,
+		(int (*) (const void *, const void *)) library_tab_compare);
+
+	// TODO: we ought to remember the previous level's selection and item_top
+	g_library_tab.super.item_count = g_library_tab.items.len;
+
+	app_fix_view_range ();
+	app_move_selection (0);
+	app_invalidate ();
+}
+
+static const char *
+library_tab_path (void)
+{
+	struct str *path = &g_library_tab.path;
+	return path->len ? path->str : "/";
+}
+
+static void
+library_tab_reload (const char *new_path)
+{
+	// TODO: actually we should update the path _after_ we receive data
+	if (new_path)
+	{
+		struct str *path = &g_library_tab.path;
+		str_reset (path);
+		str_append (path, new_path);
+	}
+
+	struct mpd_client *c = &g_ctx.client;
+	mpd_client_send_command (c, "lsinfo", library_tab_path (), NULL);
+
+	mpd_client_add_task (c, library_tab_on_data, NULL);
+	mpd_client_idle (c, 0);
+}
+
+static bool
+library_tab_on_action (enum user_action action)
+{
+	struct tab *self = g_ctx.active_tab;
+	if (self->item_selected < 0)
+		return false;
+
+	struct mpd_client *c = &g_ctx.client;
+	if (c->state != MPD_CONNECTED)
+		return false;
+
+	char *item = g_library_tab.items.vector[self->item_selected];
+	char type = *item++;
+	const char *item_path = strchr (item, '\0') + 1;
+
+	switch (action)
+	{
+	case USER_ACTION_CHOOSE:
+		switch (type)
+		{
+		case LIBRARY_ROOT: library_tab_reload ("");        break;
+		case LIBRARY_UP:
+		{
+			struct str *path = &g_library_tab.path;
+			char *last_slash = strrchr (path->str, '/');
+			if (last_slash)
+			{
+				char *new_path = xstrndup (path->str, last_slash - path->str);
+				library_tab_reload (new_path);
+				free (new_path);
+			}
+			else
+				library_tab_reload ("");
+			break;
+		}
+		case LIBRARY_DIR:  library_tab_reload (item_path); break;
+		case LIBRARY_FILE: MPD_SIMPLE ("add", item_path)   break;
+		default:           hard_assert (!"invalid item type");
+		}
+		return true;
+	case USER_ACTION_MPD_REPLACE:
+		// FIXME: we also need to play it if we've been playing things already
+		if (type == LIBRARY_DIR || type == LIBRARY_FILE)
+		{
+			MPD_SIMPLE ("clear");
+			MPD_SIMPLE ("add", item_path)
+			return true;
+		}
+		return false;
+	case USER_ACTION_MPD_ADD:
+		if (type == LIBRARY_DIR || type == LIBRARY_FILE)
+		{
+			MPD_SIMPLE ("add", item_path)
+			return true;
+		}
+		break;
+	default:
+		break;
+	}
+	return false;
+}
+
+static struct tab *
+library_tab_init (void)
+{
+	str_init (&g_library_tab.path);
+	str_vector_init (&g_library_tab.items);
+
+	struct tab *super = &g_library_tab.super;
+	tab_init (super, "Library");
+	super->on_action = library_tab_on_action;
+	super->on_item_draw = library_tab_on_item_draw;
+	return super;
+}
+
 // --- Streams -----------------------------------------------------------------
 
 // MPD can only parse m3u8 playlists, and only when it feels like doing so
@@ -2615,6 +2851,9 @@ mpd_on_events (unsigned subsystems, void *user_data)
 	(void) user_data;
 	struct mpd_client *c = &g_ctx.client;
 
+	if (subsystems & MPD_SUBSYSTEM_DATABASE)
+		library_tab_reload (NULL);
+
 	if (subsystems & (MPD_SUBSYSTEM_PLAYER
 		| MPD_SUBSYSTEM_PLAYLIST | MPD_SUBSYSTEM_MIXER))
 		mpd_request_info ();
@@ -2639,7 +2878,10 @@ mpd_on_password_response (const struct mpd_response *response,
 	struct mpd_client *c = &g_ctx.client;
 
 	if (response->success)
+	{
 		mpd_request_info ();
+		library_tab_reload (NULL);
+	}
 	else
 	{
 		print_error ("%s: %s",
@@ -2662,7 +2904,10 @@ mpd_on_connected (void *user_data)
 		mpd_client_add_task (c, mpd_on_password_response, NULL);
 	}
 	else
+	{
 		mpd_request_info ();
+		library_tab_reload (NULL);
+	}
 }
 
 static void
@@ -2985,6 +3230,7 @@ main (int argc, char *argv[])
 	app_prepend_tab (info_tab_init ());
 	if (g_ctx.streams.len)
 		app_prepend_tab (streams_tab_init ());
+	app_prepend_tab (library_tab_init ());
 	app_prepend_tab (current_tab_init ());
 	app_switch_tab ((g_ctx.help_tab = help_tab_init ()));
 
