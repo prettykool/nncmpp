@@ -2739,33 +2739,33 @@ mpd_process_info (const struct str_vector *data)
 	map.key_xfrm = tolower_ascii_strxfrm;
 	map.free = free;
 
-	// First there's the status, followed by playlist items chunked by "file".
-	// Unfortunately we need a field from the front before we process the rest
-	// but otherwise it's much better to process the list from the back.
-	//
-	// TODO: one thing that could help is command_list_ok_begin,
-	//   which can add NULL strings to the vector in place of list_OK
-	unsigned long n;
-	for (size_t i = 0; i < data->len; i++)
-	{
-		static const char needle[] = "playlistlength: ";
-		if (!strncasecmp_ascii (data->vector[i], needle, sizeof needle - 1)
-		 && xstrtoul (&n, data->vector[i] + sizeof needle - 1, 10))
-		{
-			item_list_resize (&g_ctx.playlist, n);
-			break;
-		}
-	}
-
-	char *key, *value;
-	for (size_t i = data->len; i--; )
+	// First there's the status, followed by playlist items chunked by "file"
+	unsigned long n; char *key, *value;
+	for (size_t i = 0; i < data->len - 1 && data->vector[i]; i++)
 	{
 		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
 		{
 			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
 			continue;
 		}
+		if (!strcasecmp_ascii (key, "playlistlength")
+			&& xstrtoul (&n, value, 10))
+			item_list_resize (&g_ctx.playlist, n);
 		str_map_set (&map, key, xstrdup (value));
+	}
+	g_ctx.playback_info = map;
+
+	// It's much better to process the playlist from the back
+	str_map_init (&map);
+	map.key_xfrm = tolower_ascii_strxfrm;
+	for (size_t i = data->len - 1; i-- && data->vector[i]; )
+	{
+		if (!(key = mpd_client_parse_kv (data->vector[i], &value)))
+		{
+			print_debug ("%s: %s", "erroneous MPD output", data->vector[i]);
+			continue;
+		}
+		str_map_set (&map, key, value);
 		if (!strcasecmp_ascii (key, "file"))
 		{
 			if (xstrtoul_map (&map, "pos", &n))
@@ -2773,7 +2773,7 @@ mpd_process_info (const struct str_vector *data)
 			str_map_clear (&map);
 		}
 	}
-	g_ctx.playback_info = map;
+	str_map_free (&map);
 }
 
 static void
@@ -2792,13 +2792,13 @@ mpd_on_info_response (const struct mpd_response *response,
 	g_ctx.playlist_version = 0;
 	// TODO: preset an error player state?
 
-	if (response->success)
-		mpd_process_info (data);
-	else
-	{
+	if (!response->success)
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
-	}
+	else if (!data->len)
+		print_debug ("empty MPD status response");
+	else
+		mpd_process_info (data);
 
 	mpd_update_playback_state ();
 	current_tab_update ();
@@ -2826,7 +2826,7 @@ mpd_request_info (void)
 {
 	struct mpd_client *c = &g_ctx.client;
 
-	mpd_client_list_begin (c);
+	mpd_client_list_ok_begin (c);
 	mpd_client_send_command (c, "status", NULL);
 	char *last_version = xstrdup_printf ("%" PRIu32, g_ctx.playlist_version);
 	mpd_client_send_command (c, "plchanges", last_version, NULL);
