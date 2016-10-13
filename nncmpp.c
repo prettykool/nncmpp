@@ -1974,8 +1974,15 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 {
 	// TODO: better output
 	compact_map_t map = item_list_get (&g_ctx.playlist, item_index);
-	row_buffer_append (buffer, compact_map_find (map, "file"),
-		(int) item_index == g_ctx.song ? A_BOLD : 0);
+	const char *artist = compact_map_find (map, "artist");
+	const char *title  = compact_map_find (map, "title");
+
+	chtype attrs = (int) item_index == g_ctx.song ? A_BOLD : 0;
+	if (artist && title)
+		row_buffer_addv (buffer,
+			artist, attrs, " - ", attrs, title, attrs, NULL);
+	else
+		row_buffer_append (buffer, compact_map_find (map, "file"), attrs);
 }
 
 static bool
