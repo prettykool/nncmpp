@@ -1791,7 +1791,7 @@ app_process_action (enum action action)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
-app_process_left_mouse_click (int line, int column)
+app_process_left_mouse_click (int line, int column, bool double_click)
 {
 	if (line == g_ctx.controls_offset)
 	{
@@ -1861,22 +1861,22 @@ app_process_left_mouse_click (int line, int column)
 		else
 			tab->item_selected = row_index + tab->item_top;
 		app_invalidate ();
+
+		if (double_click)
+			app_process_action (ACTION_CHOOSE);
 	}
 	return true;
 }
 
 static bool
-app_process_mouse (termo_key_t *event)
+app_process_mouse (termo_mouse_event_t type, int line, int column, int button,
+	bool double_click)
 {
-	int line, column, button;
-	termo_mouse_event_t type;
-	termo_interpret_mouse (g_ctx.tk, event, &type, &button, &line, &column);
-
 	if (type != TERMO_MOUSE_PRESS)
 		return true;
 
 	if (button == 1)
-		return app_process_left_mouse_click (line, column);
+		return app_process_left_mouse_click (line, column, double_click);
 	else if (button == 4)
 		return app_process_action (ACTION_SCROLL_UP);
 	else if (button == 5)
@@ -1933,9 +1933,6 @@ g_default_bindings[] =
 static bool
 app_process_termo_event (termo_key_t *event)
 {
-	if (event->type == TERMO_TYPE_MOUSE)
-		return app_process_mouse (event);
-
 	// TODO: pre-parse the keys, order them by termo_keycmp() and binary search
 	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
 	{
@@ -3060,18 +3057,41 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 	termo_advisereadable (g_ctx.tk);
 
 	termo_key_t event;
+	int64_t event_ts = clock_msec (CLOCK_BEST);
 	termo_result_t res;
 	while ((res = termo_getkey (g_ctx.tk, &event)) == TERMO_RES_KEY)
-		if (!app_process_termo_event (&event))
+	{
+		// Simple double click detection via release--press delay, only a bit
+		// complicated by the fact that we don't know what's being released
+		static termo_key_t last_event;
+		static int64_t last_event_ts;
+		static int last_button;
+
+		int y, x, button, y_last, x_last;
+		termo_mouse_event_t type, type_last;
+		if (termo_interpret_mouse (g_ctx.tk, &event, &type, &button, &y, &x))
+		{
+			bool double_click = termo_interpret_mouse
+				(g_ctx.tk, &last_event, &type_last, NULL, &y_last, &x_last)
+				&& event_ts - last_event_ts < 500
+				&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
+				&& y_last == y && x_last == x && last_button == button;
+			if (!app_process_mouse (type, y, x, button, double_click))
+				beep ();
+			if (type == TERMO_MOUSE_PRESS)
+				last_button = button;
+		}
+		else if (!app_process_termo_event (&event))
 			beep ();
+
+		last_event = event;
+		last_event_ts = event_ts;
+	}
 
 	if (res == TERMO_RES_AGAIN)
 		poller_timer_set (&g_ctx.tk_timer, termo_get_waittime (g_ctx.tk));
 	else if (res == TERMO_RES_ERROR || res == TERMO_RES_EOF)
-	{
 		app_quit ();
-		return;
-	}
 }
 
 static void
