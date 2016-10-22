@@ -1209,8 +1209,8 @@ app_draw_song_info (void)
 	app_flush_header (&buf, a_normal);
 }
 
-static void
-app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
+static char *
+app_time_string (int seconds)
 {
 	int minutes = seconds / 60; seconds %= 60;
 	int hours   = minutes / 60; minutes %= 60;
@@ -1224,8 +1224,15 @@ app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
 		str_append_printf (&s, "%d:", minutes);
 
 	str_append_printf (&s, "%02d", seconds);
-	row_buffer_append (buf, s.str, attrs);
-	str_free (&s);
+	return str_steal (&s);
+}
+
+static void
+app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
+{
+	char *s = app_time_string (seconds);
+	row_buffer_append (buf, s, attrs);
+	free (s);
 }
 
 static void
@@ -1969,7 +1976,9 @@ static void
 current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	int width)
 {
-	// TODO: better output
+	// TODO: configurable output, maybe dynamically sized columns
+	int length_len = 1 /*separator */ + 2 /* h */ + 3 /* m */+ 3 /* s */;
+
 	compact_map_t map = item_list_get (&g_ctx.playlist, item_index);
 	const char *artist = compact_map_find (map, "artist");
 	const char *title  = compact_map_find (map, "title");
@@ -1980,6 +1989,19 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 			artist, attrs, " - ", attrs, title, attrs, NULL);
 	else
 		row_buffer_append (buffer, compact_map_find (map, "file"), attrs);
+
+	row_buffer_align (buffer, width - length_len, attrs);
+
+	char *s = NULL;
+	unsigned long n;
+	const char *time = compact_map_find (map, "time");
+	if (!time || !xstrtoul (&n, time, 10) || !(s = app_time_string (n)))
+		s = xstrdup ("?");
+
+	char *right_aligned = xstrdup_printf ("%*s", length_len, s);
+	row_buffer_append (buffer, right_aligned, attrs);
+	free (right_aligned);
+	free (s);
 }
 
 static bool
