@@ -101,6 +101,7 @@ enum
 #include <unistr.h>
 #include <uniwidth.h>
 #include <uniconv.h>
+#include <unicase.h>
 
 // We need cURL to extract links from Internet stream playlists.  It'd be way
 // too much code to do this all by ourselves, and there's nothing better around.
@@ -784,9 +785,20 @@ load_config_colors (struct config_item *subtree, void *user_data)
 }
 
 static int
+app_casecmp (const uint8_t *a, const uint8_t *b)
+{
+	int res;
+	// XXX: this seems to produce some strange results
+	if (u8_casecmp (a, strlen ((const char *) a), b, strlen ((const char *) b),
+		NULL, NULL, &res))
+		res = u8_strcmp (a, b);
+	return res;
+}
+
+static int
 str_vector_sort_utf8_cb (const void *a, const void *b)
 {
-	return u8_strcmp (*(const uint8_t **) a, *(const uint8_t **) b);
+	return app_casecmp (*(const uint8_t **) a, *(const uint8_t **) b);
 }
 
 static void
@@ -2143,8 +2155,7 @@ library_tab_compare (char **a, char **b)
 	if (xa.type != xb.type)
 		return xa.type - xb.type;
 
-	// TODO: this should be case insensitive
-	return u8_strcmp ((uint8_t *) xa.path, (uint8_t *) xb.path);
+	return app_casecmp ((uint8_t *) xa.path, (uint8_t *) xb.path);
 }
 
 static void
