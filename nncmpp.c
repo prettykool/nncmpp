@@ -695,7 +695,7 @@ static struct config_schema g_config_settings[] =
 	{ .name      = "address",
 	  .comment   = "Address to connect to the MPD server",
 	  .type      = CONFIG_ITEM_STRING,
-	  .default_  = "localhost" },
+	  .default_  = "\"localhost\"" },
 	{ .name      = "password",
 	  .comment   = "Password to use for MPD authentication",
 	  .type      = CONFIG_ITEM_STRING },
@@ -831,6 +831,9 @@ app_load_configuration (void)
 	config_register_module (config, "settings", load_config_settings, NULL);
 	config_register_module (config, "colors",   load_config_colors,   NULL);
 	config_register_module (config, "streams",  load_config_streams,  NULL);
+
+	// Bootstrap configuration, so that we can access schema items at all
+	config_load (config, config_item_object ());
 
 	char *filename = resolve_filename
 		(PROGRAM_NAME ".conf", resolve_relative_config_filename);
