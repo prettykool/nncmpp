@@ -3114,7 +3114,11 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 				&& y_last == y && x_last == x && last_button == button;
 			if (!app_process_mouse (type, y, x, button, double_click))
 				beep ();
-			if (type == TERMO_MOUSE_PRESS)
+
+			// Prevent interpreting triple clicks as two double clicks
+			if (double_click)
+				last_button = 0;
+			else if (type == TERMO_MOUSE_PRESS)
 				last_button = button;
 		}
 		else if (!app_process_termo_event (&event))
