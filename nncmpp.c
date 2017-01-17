@@ -873,8 +873,6 @@ app_init_attributes (void)
 static void
 app_init_context (void)
 {
-	memset (&g_ctx, 0, sizeof g_ctx);
-
 	poller_init (&g_ctx.poller);
 	mpd_client_init (&g_ctx.client, &g_ctx.poller);
 	config_init (&g_ctx.config);
@@ -1432,12 +1430,13 @@ app_draw_scrollbar (void)
 
 	// TODO: clamp the values, make sure they follow the right order
 	// We subtract half a character from both the top and the bottom, hence -1
-	int length = (float) visible_items / (int) tab->item_count
+	// XXX: I'm not completely sure why we need that 0.5 constant in both
+	int length = (double) visible_items / tab->item_count
 		* (visible_items - 1) * 8 + 0.5;
-	int start  = (float) tab->item_top / (int) tab->item_count
+	int start  = (double) tab->item_top / tab->item_count
 		* (visible_items - 1) * 8 + 0.5;
 
-	// Then we make sure the bar is high at least one character, hence +8
+	// Then we make sure the bar is at least one character high, hence +8
 	int end = start + length + 8;
 
 	int start_part = start % 8; start /= 8;
@@ -1804,7 +1803,6 @@ app_process_action (enum action action)
 	case ACTION_NONE:
 		break;
 	default:
-		beep ();
 		return false;
 	}
 	return true;
