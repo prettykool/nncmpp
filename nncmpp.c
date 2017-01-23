@@ -1044,7 +1044,7 @@ app_draw_status (void)
 	bool stopped = g_ctx.state == PLAYER_STOPPED;
 	chtype a_song_action = stopped ? a_normal : a_highlight;
 
-	const char *toggle = g_ctx.state == PLAYER_PLAYING ? "|>" : "||";
+	const char *toggle = g_ctx.state == PLAYER_PLAYING ? "||" : "|>";
 	row_buffer_append_args (&buf,
 		"<<",   a_song_action, " ",  a_normal,
 		toggle, a_highlight,   " ",  a_normal,
