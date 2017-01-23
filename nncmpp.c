@@ -1488,6 +1488,7 @@ app_process_action (enum action action)
 		if (g_ctx.volume >= 0)
 		{
 			char *volume = xstrdup_printf ("%d", MIN (100, g_ctx.volume + 10));
+			// FIXME: if this breaks, it leaks "volume"
 			MPD_SIMPLE ("setvol", volume)
 			free (volume);
 		}
@@ -1496,6 +1497,7 @@ app_process_action (enum action action)
 		if (g_ctx.volume >= 0)
 		{
 			char *volume = xstrdup_printf ("%d", MAX (0, g_ctx.volume - 10));
+			// FIXME: if this breaks, it leaks "volume"
 			MPD_SIMPLE ("setvol", volume)
 			free (volume);
 		}
@@ -1783,11 +1785,13 @@ current_tab_on_action (enum action action)
 		char *song;
 	case ACTION_CHOOSE:
 		song = xstrdup_printf ("%d", self->item_selected);
+		// FIXME: if this breaks, it leaks "volume"
 		MPD_SIMPLE ("play", song)
 		free (song);
 		return true;
 	case ACTION_DELETE:
 		song = xstrdup_printf ("%d", self->item_selected);
+		// FIXME: if this breaks, it leaks "volume"
 		MPD_SIMPLE ("delete", song)
 		free (song);
 		return true;
