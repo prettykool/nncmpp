@@ -64,44 +64,18 @@ enum
 #define LIBERTY_WANT_PROTO_HTTP
 #define LIBERTY_WANT_PROTO_MPD
 #include "liberty/liberty.c"
+#include "liberty/liberty-tui.c"
 
 #include <locale.h>
 #include <termios.h>
 #ifndef TIOCGWINSZ
 #include <sys/ioctl.h>
 #endif  // ! TIOCGWINSZ
-#include <ncurses.h>
 
 // ncurses is notoriously retarded for input handling, we need something
 // different if only to receive mouse events reliably.
 
 #include "termo.h"
-
-// It is surprisingly hard to find a good library to handle Unicode shenanigans,
-// and there's enough of those for it to be impractical to reimplement them.
-//
-//                         GLib          ICU     libunistring    utf8proc
-// Decently sized            .            .            x            x
-// Grapheme breaks           .            x            .            x
-// Character width           x            .            x            x
-// Locale handling           .            .            x            .
-// Liberal license           .            x            .            x
-//
-// Also note that the ICU API is icky and uses UTF-16 for its primary encoding.
-//
-// Currently we're chugging along with libunistring but utf8proc seems viable.
-// Non-Unicode locales can mostly be handled with simple iconv like in sdtui.
-// Similarly grapheme breaks can be guessed at using character width (a basic
-// test here is Zalgo text).
-//
-// None of this is ever going to work too reliably anyway because terminals
-// and Unicode don't go awfully well together.  In particular, character cell
-// devices have some problems with double-wide characters.
-
-#include <unistr.h>
-#include <uniwidth.h>
-#include <uniconv.h>
-#include <unicase.h>
 
 // We need cURL to extract links from Internet stream playlists.  It'd be way
 // too much code to do this all by ourselves, and there's nothing better around.
@@ -589,13 +563,6 @@ struct tab
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-struct attrs
-{
-	short fg;                           ///< Foreground colour index
-	short bg;                           ///< Background colour index
-	chtype attrs;                       ///< Other attributes
-};
-
 enum player_state { PLAYER_STOPPED, PLAYER_PLAYING, PLAYER_PAUSED };
 
 // Basically a container for most of the globals; no big sense in handing
@@ -636,7 +603,7 @@ static struct app_context
 	// Data:
 
 	struct config config;               ///< Program configuration
-	struct str_vector streams;          ///< List of "name NUL URI NUL"
+	struct strv streams;                ///< List of "name NUL URI NUL"
 
 	struct tab *help_tab;               ///< Special help tab
 	struct tab *tabs;                   ///< All other tabs
@@ -725,43 +692,6 @@ get_config_string (struct config_item *root, const char *key)
 	return item->value.string.str;
 }
 
-/// Load configuration for a color using a subset of git config colors
-static void
-app_load_color (struct config_item *subtree, const char *name, int id)
-{
-	const char *value = get_config_string (subtree, name);
-	if (!value)
-		return;
-
-	struct str_vector v;
-	str_vector_init (&v);
-	cstr_split (value, " ", true, &v);
-
-	int colors = 0;
-	struct attrs attrs = { -1, -1, 0 };
-	for (char **it = v.vector; *it; it++)
-	{
-		char *end = NULL;
-		long n = strtol (*it, &end, 10);
-		if (*it != end && !*end && n >= SHRT_MIN && n <= SHRT_MAX)
-		{
-			if (colors == 0) attrs.fg = n;
-			if (colors == 1) attrs.bg = n;
-			colors++;
-		}
-		else if (!strcmp (*it, "bold"))    attrs.attrs |= A_BOLD;
-		else if (!strcmp (*it, "dim"))     attrs.attrs |= A_DIM;
-		else if (!strcmp (*it, "ul"))      attrs.attrs |= A_UNDERLINE;
-		else if (!strcmp (*it, "blink"))   attrs.attrs |= A_BLINK;
-		else if (!strcmp (*it, "reverse")) attrs.attrs |= A_REVERSE;
-#ifdef A_ITALIC
-		else if (!strcmp (*it, "italic"))  attrs.attrs |= A_ITALIC;
-#endif  // A_ITALIC
-	}
-	str_vector_free (&v);
-	g_ctx.attrs[id] = attrs;
-}
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
@@ -778,8 +708,10 @@ load_config_colors (struct config_item *subtree, void *user_data)
 	// The attributes cannot be changed dynamically right now, so it doesn't
 	// make much sense to make use of "on_change" callbacks either.
 	// For simplicity, we should reload the entire table on each change anyway.
+	const char *value;
 #define XX(name, config, fg_, bg_, attrs_) \
-	app_load_color (subtree, config, ATTRIBUTE_ ## name);
+	if ((value = get_config_string (subtree, config))) \
+		g_ctx.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 }
@@ -796,7 +728,7 @@ app_casecmp (const uint8_t *a, const uint8_t *b)
 }
 
 static int
-str_vector_sort_utf8_cb (const void *a, const void *b)
+strv_sort_utf8_cb (const void *a, const void *b)
 {
 	return app_casecmp (*(const uint8_t **) a, *(const uint8_t **) b);
 }
@@ -817,11 +749,11 @@ load_config_streams (struct config_item *subtree, void *user_data)
 			print_warning ("`%s': stream URIs must be strings", iter.link->key);
 		else
 		{
-			str_vector_add_owned (&g_ctx.streams, xstrdup_printf ("%s%c%s",
+			strv_append_owned (&g_ctx.streams, xstrdup_printf ("%s%c%s",
 				iter.link->key, 0, item->value.string.str));
 		}
 	qsort (g_ctx.streams.vector, g_ctx.streams.len,
-		sizeof *g_ctx.streams.vector, str_vector_sort_utf8_cb);
+		sizeof *g_ctx.streams.vector, strv_sort_utf8_cb);
 }
 
 static void
@@ -876,7 +808,7 @@ app_init_context (void)
 	poller_init (&g_ctx.poller);
 	mpd_client_init (&g_ctx.client, &g_ctx.poller);
 	config_init (&g_ctx.config);
-	str_vector_init (&g_ctx.streams);
+	strv_init (&g_ctx.streams);
 	item_list_init (&g_ctx.playlist);
 
 	// This is also approximately what libunistring does internally,
@@ -929,7 +861,7 @@ app_free_context (void)
 {
 	mpd_client_free (&g_ctx.client);
 	str_map_free (&g_ctx.playback_info);
-	str_vector_free (&g_ctx.streams);
+	strv_free (&g_ctx.streams);
 	item_list_free (&g_ctx.playlist);
 
 	config_free (&g_ctx.config);
@@ -965,179 +897,6 @@ app_is_character_in_locale (ucs4_t ch)
 		return false;
 	free (tmp);
 	return true;
-}
-
-// --- Terminal output ---------------------------------------------------------
-
-// Necessary abstraction to simplify aligned, formatted character output
-
-struct row_char
-{
-	ucs4_t c;                           ///< Unicode codepoint
-	chtype attrs;                       ///< Special attributes
-	int width;                          ///< How many cells this takes
-};
-
-struct row_buffer
-{
-	struct row_char *chars;             ///< Characters
-	size_t chars_len;                   ///< Character count
-	size_t chars_alloc;                 ///< Characters allocated
-	int total_width;                    ///< Total width of all characters
-};
-
-static void
-row_buffer_init (struct row_buffer *self)
-{
-	memset (self, 0, sizeof *self);
-	self->chars = xcalloc (sizeof *self->chars, (self->chars_alloc = 256));
-}
-
-static void
-row_buffer_free (struct row_buffer *self)
-{
-	free (self->chars);
-}
-
-/// Replace invalid chars and push all codepoints to the array w/ attributes.
-static void
-row_buffer_append (struct row_buffer *self, const char *str, chtype attrs)
-{
-	// The encoding is only really used internally for some corner cases
-	const char *encoding = locale_charset ();
-
-	// Note that this function is a hotspot, try to keep it decently fast
-	struct row_char current = { .attrs = attrs };
-	struct row_char invalid = { .attrs = attrs, .c = '?', .width = 1 };
-	const uint8_t *next = (const uint8_t *) str;
-	while ((next = u8_next (&current.c, next)))
-	{
-		if (self->chars_len >= self->chars_alloc)
-			self->chars = xreallocarray (self->chars,
-				sizeof *self->chars, (self->chars_alloc <<= 1));
-
-		current.width = uc_width (current.c, encoding);
-		if (current.width < 0 || !app_is_character_in_locale (current.c))
-			current = invalid;
-
-		self->chars[self->chars_len++] = current;
-		self->total_width += current.width;
-	}
-}
-
-static void
-row_buffer_addv (struct row_buffer *self, const char *s, ...)
-	ATTRIBUTE_SENTINEL;
-
-static void
-row_buffer_addv (struct row_buffer *self, const char *s, ...)
-{
-	va_list ap;
-	va_start (ap, s);
-
-	while (s)
-	{
-		row_buffer_append (self, s, va_arg (ap, chtype));
-		s = va_arg (ap, const char *);
-	}
-	va_end (ap);
-}
-
-/// Pop as many codepoints as needed to free up "space" character cells.
-/// Given the suffix nature of combining marks, this should work pretty fine.
-static int
-row_buffer_pop_cells (struct row_buffer *self, int space)
-{
-	int made = 0;
-	while (self->chars_len && made < space)
-		made += self->chars[--self->chars_len].width;
-	self->total_width -= made;
-	return made;
-}
-
-static void
-row_buffer_space (struct row_buffer *self, int width, chtype attrs)
-{
-	if (width < 0)
-		return;
-
-	while (self->chars_len + width >= self->chars_alloc)
-		self->chars = xreallocarray (self->chars,
-			sizeof *self->chars, (self->chars_alloc <<= 1));
-
-	struct row_char space = { .attrs = attrs, .c = ' ', .width = 1 };
-	self->total_width += width;
-	while (width-- > 0)
-		self->chars[self->chars_len++] = space;
-}
-
-static void
-row_buffer_ellipsis (struct row_buffer *self, int target)
-{
-	if (self->total_width <= target
-	 || !row_buffer_pop_cells (self, self->total_width - target))
-		return;
-
-	// We use attributes from the last character we've removed,
-	// assuming that we don't shrink the array (and there's no real need)
-	ucs4_t ellipsis = L'…';
-	if (app_is_character_in_locale (ellipsis))
-	{
-		if (self->total_width >= target)
-			row_buffer_pop_cells (self, 1);
-		if (self->total_width + 1 <= target)
-			row_buffer_append (self, "…",   self->chars[self->chars_len].attrs);
-	}
-	else if (target >= 3)
-	{
-		if (self->total_width >= target)
-			row_buffer_pop_cells (self, 3);
-		if (self->total_width + 3 <= target)
-			row_buffer_append (self, "...", self->chars[self->chars_len].attrs);
-	}
-}
-
-static void
-row_buffer_align (struct row_buffer *self, int target, chtype attrs)
-{
-	row_buffer_ellipsis (self, target);
-	row_buffer_space (self, target - self->total_width, attrs);
-}
-
-static void
-row_buffer_print (uint32_t *ucs4, chtype attrs)
-{
-	// This assumes that we can reset the attribute set without consequences
-	char *str = u32_strconv_to_locale (ucs4);
-	if (str)
-	{
-		attrset (attrs);
-		addstr (str);
-		attrset (0);
-		free (str);
-	}
-}
-
-static void
-row_buffer_flush (struct row_buffer *self)
-{
-	if (!self->chars_len)
-		return;
-
-	// We only NUL-terminate the chunks because of the libunistring API
-	uint32_t chunk[self->chars_len + 1], *insertion_point = chunk;
-	for (size_t i = 0; i < self->chars_len; i++)
-	{
-		struct row_char *iter = self->chars + i;
-		if (i && iter[0].attrs != iter[-1].attrs)
-		{
-			row_buffer_print (chunk, iter[-1].attrs);
-			insertion_point = chunk;
-		}
-		*insertion_point++ = iter->c;
-		*insertion_point = 0;
-	}
-	row_buffer_print (chunk, self->chars[self->chars_len - 1].attrs);
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -1208,17 +967,11 @@ app_draw_song_info (void)
 	row_buffer_init (&buf);
 
 	if (artist)
-	{
-		if (buf.total_width)
-			row_buffer_append (&buf, " ", a_normal);
-		row_buffer_addv (&buf, "by ", a_normal, artist, a_highlight, NULL);
-	}
+		row_buffer_append_args (&buf, " by "   + !buf.total_width, a_normal,
+			artist, a_highlight, NULL);
 	if (album)
-	{
-		if (buf.total_width)
-			row_buffer_append (&buf, " ", a_normal);
-		row_buffer_addv (&buf, "from ", a_normal, album, a_highlight, NULL);
-	}
+		row_buffer_append_args (&buf, " from " + !buf.total_width, a_normal,
+			album, a_highlight, NULL);
 	app_flush_header (&buf, a_normal);
 }
 
@@ -1289,15 +1042,15 @@ app_draw_status (void)
 	row_buffer_init (&buf);
 
 	bool stopped = g_ctx.state == PLAYER_STOPPED;
-
 	chtype a_song_action = stopped ? a_normal : a_highlight;
-	row_buffer_addv (&buf, "<<", a_song_action, " ", a_normal, NULL);
-	if (g_ctx.state == PLAYER_PLAYING)
-		row_buffer_addv (&buf, "||", a_highlight, " ", a_normal, NULL);
-	else
-		row_buffer_addv (&buf, "|>", a_highlight, " ", a_normal, NULL);
-	row_buffer_addv (&buf, "[]", a_song_action, " ", a_normal, NULL);
-	row_buffer_addv (&buf, ">>", a_song_action, "  ", a_normal, NULL);
+
+	const char *toggle = g_ctx.state == PLAYER_PLAYING ? "|>" : "||";
+	row_buffer_append_args (&buf,
+		"<<",   a_song_action, " ",  a_normal,
+		toggle, a_highlight,   " ",  a_normal,
+		"[]",   a_song_action, " ",  a_normal,
+		">>",   a_song_action, "  ", a_normal,
+		NULL);
 
 	if (stopped)
 		row_buffer_append (&buf, "Stopped", a_normal);
@@ -1998,7 +1751,7 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 
 	chtype attrs = (int) item_index == g_ctx.song ? A_BOLD : 0;
 	if (artist && title)
-		row_buffer_addv (buffer,
+		row_buffer_append_args (buffer,
 			artist, attrs, " - ", attrs, title, attrs, NULL);
 	else
 		row_buffer_append (buffer, compact_map_find (map, "file"), attrs);
@@ -2068,7 +1821,7 @@ static struct
 {
 	struct tab super;                   ///< Parent class
 	struct str path;                    ///< Current path
-	struct str_vector items;            ///< Current items (type, name, path)
+	struct strv items;                  ///< Current items (type, name, path)
 }
 g_library_tab;
 
@@ -2092,7 +1845,7 @@ struct library_tab_item
 static void
 library_tab_add (int type, const char *name, const char *path)
 {
-	str_vector_add_owned (&g_library_tab.items,
+	strv_append_owned (&g_library_tab.items,
 		xstrdup_printf ("%c%s%c%s", type, name, 0, path));
 }
 
@@ -2117,14 +1870,16 @@ library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 
 	struct library_tab_item x =
 		library_tab_resolve (g_library_tab.items.vector[item_index]);
+	const char *prefix, *name;
 	switch (x.type)
 	{
-	case LIBRARY_ROOT: row_buffer_append (buffer, "/",   0); break;
-	case LIBRARY_UP:   row_buffer_append (buffer, "/..", 0); break;
-	case LIBRARY_DIR:  row_buffer_addv (buffer, "/", 0, x.name, 0, NULL); break;
-	case LIBRARY_FILE: row_buffer_addv (buffer, " ", 0, x.name, 0, NULL); break;
+	case LIBRARY_ROOT: prefix = "/"; name = "";     break;
+	case LIBRARY_UP:   prefix = "/"; name = "..";   break;
+	case LIBRARY_DIR:  prefix = "/"; name = x.name; break;
+	case LIBRARY_FILE: prefix = " "; name = x.name; break;
 	default:           hard_assert (!"invalid item type");
 	}
+	row_buffer_append_args (buffer, prefix, 0, name, 0, NULL);
 }
 
 static char
@@ -2161,13 +1916,13 @@ library_tab_compare (char **a, char **b)
 
 static void
 library_tab_on_data (const struct mpd_response *response,
-	const struct str_vector *data, void *user_data)
+	const struct strv *data, void *user_data)
 {
 	(void) user_data;
 	if (!response->success)
 		return;
 
-	str_vector_reset (&g_library_tab.items);
+	strv_reset (&g_library_tab.items);
 
 	struct str *path = &g_library_tab.path;
 	if (path->len)
@@ -2202,7 +1957,7 @@ library_tab_on_data (const struct mpd_response *response,
 		}
 	str_map_free (&map);
 
-	struct str_vector *items = &g_library_tab.items;
+	struct strv *items = &g_library_tab.items;
 	qsort (items->vector, items->len, sizeof *items->vector,
 		(int (*) (const void *, const void *)) library_tab_compare);
 
@@ -2280,7 +2035,7 @@ static struct tab *
 library_tab_init (void)
 {
 	str_init (&g_library_tab.path);
-	str_vector_init (&g_library_tab.items);
+	strv_init (&g_library_tab.items);
 
 	struct tab *super = &g_library_tab.super;
 	tab_init (super, "Library");
@@ -2316,11 +2071,11 @@ is_content_type (const char *content_type,
 
 static void
 streams_tab_parse_playlist (const char *playlist, const char *content_type,
-	struct str_vector *out)
+	struct strv *out)
 {
 	// We accept a lot of very broken stuff because this is the real world
-	struct str_vector lines;
-	str_vector_init (&lines);
+	struct strv lines;
+	strv_init (&lines);
 	cstr_split (playlist, "\r\n", true, &lines);
 
 	// Since this excludes '"', it should even work for XMLs (w/o entities)
@@ -2343,20 +2098,20 @@ streams_tab_parse_playlist (const char *playlist, const char *content_type,
 			char *target = xstrndup (lines.vector[i] + groups[1].rm_so,
 				groups[1].rm_eo - groups[1].rm_so);
 			if (utf8_validate (target, strlen (target)))
-				str_vector_add_owned (out, target);
+				strv_append_owned (out, target);
 			else
 			{
-				str_vector_add_owned (out, latin1_to_utf8 (target));
+				strv_append_owned (out, latin1_to_utf8 (target));
 				free (target);
 			}
 		}
 	regex_free (re);
-	str_vector_free (&lines);
+	strv_free (&lines);
 }
 
 static bool
 streams_tab_extract_links (struct str *data, const char *content_type,
-	struct str_vector *out)
+	struct strv *out)
 {
 	// Since playlists are also "audio/*", this seems like a sane thing to do
 	for (size_t i = 0; i < data->len; i++)
@@ -2414,15 +2169,15 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	if (self->replace)
 		mpd_client_send_command (c, "clear", NULL);
 
-	struct str_vector links;
-	str_vector_init (&links);
+	struct strv links;
+	strv_init (&links);
 
 	if (!streams_tab_extract_links (&self->data, type, &links))
-		str_vector_add (&links, uri);
+		strv_append (&links, uri);
 	for (size_t i = 0; i < links.len; i++)
 		mpd_client_send_command (c, "add", links.vector[i], NULL);
 
-	str_vector_free (&links);
+	strv_free (&links);
 	mpd_client_list_end (c);
 	mpd_client_add_task (c, NULL, NULL);
 	mpd_client_idle (c, 0);
@@ -2545,8 +2300,8 @@ streams_tab_init (void)
 static struct
 {
 	struct tab super;                   ///< Parent class
-	struct str_vector keys;             ///< Data keys
-	struct str_vector values;           ///< Data values
+	struct strv keys;                   ///< Data keys
+	struct strv values;                 ///< Data values
 }
 g_info_tab;
 
@@ -2563,7 +2318,7 @@ info_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	//  - Debug   -- it'd take up considerably more space
 	// However so far we're only showing show key-value pairs.
 
-	row_buffer_addv (buffer,
+	row_buffer_append_args (buffer,
 		g_info_tab.keys.vector[item_index], A_BOLD, ":", A_BOLD, NULL);
 	row_buffer_space (buffer, 8 - buffer->total_width, 0);
 	row_buffer_append (buffer, g_info_tab.values.vector[item_index], 0);
@@ -2575,16 +2330,16 @@ info_tab_add (compact_map_t data, const char *field)
 	const char *value = compact_map_find (data, field);
 	if (!value) value = "";
 
-	str_vector_add (&g_info_tab.keys, field);
-	str_vector_add (&g_info_tab.values, value);
+	strv_append (&g_info_tab.keys, field);
+	strv_append (&g_info_tab.values, value);
 	g_info_tab.super.item_count++;
 }
 
 static void
 info_tab_update (void)
 {
-	str_vector_reset (&g_info_tab.keys);
-	str_vector_reset (&g_info_tab.values);
+	strv_reset (&g_info_tab.keys);
+	strv_reset (&g_info_tab.values);
 	g_info_tab.super.item_count = 0;
 
 	compact_map_t map;
@@ -2603,8 +2358,8 @@ info_tab_update (void)
 static struct tab *
 info_tab_init (void)
 {
-	str_vector_init (&g_info_tab.keys);
-	str_vector_init (&g_info_tab.values);
+	strv_init (&g_info_tab.keys);
+	strv_init (&g_info_tab.values);
 
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
@@ -2778,7 +2533,7 @@ mpd_update_playback_state (void)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
-mpd_process_info (const struct str_vector *data)
+mpd_process_info (const struct strv *data)
 {
 	struct str_map map;
 	str_map_init (&map);
@@ -2818,7 +2573,7 @@ mpd_process_info (const struct str_vector *data)
 
 static void
 mpd_on_info_response (const struct mpd_response *response,
-	const struct str_vector *data, void *user_data)
+	const struct strv *data, void *user_data)
 {
 	(void) user_data;
 
@@ -2902,7 +2657,7 @@ mpd_queue_reconnect (void)
 
 static void
 mpd_on_password_response (const struct mpd_response *response,
-	const struct str_vector *data, void *user_data)
+	const struct strv *data, void *user_data)
 {
 	(void) data;
 	(void) user_data;
