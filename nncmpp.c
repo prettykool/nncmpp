@@ -1432,14 +1432,41 @@ g_actions[] =
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-#define MPD_SIMPLE(...)                             \
-{                                                   \
-	if (c->state != MPD_CONNECTED)                  \
-		break;                                      \
-	mpd_client_send_command (c, __VA_ARGS__, NULL); \
-	mpd_client_add_task (c, NULL, NULL);            \
-	mpd_client_idle (c, 0);                         \
+static void
+mpd_client_vsend_command (struct mpd_client *self, va_list ap)
+{
+	struct strv v;
+	strv_init (&v);
+
+	const char *command;
+	while ((command = va_arg (ap, const char *)))
+		strv_append (&v, command);
+	mpd_client_send_commandv (self, v.vector);
+	strv_free (&v);
 }
+
+/// Send a command to MPD without caring about the response
+static bool mpd_client_send_simple (struct mpd_client *c, ...)
+	ATTRIBUTE_SENTINEL;
+
+static bool
+mpd_client_send_simple (struct mpd_client *self, ...)
+{
+	if (self->state != MPD_CONNECTED)
+		return false;
+
+	va_list ap;
+	va_start (ap, self);
+	mpd_client_vsend_command (self, ap);
+	va_end (ap);
+
+	mpd_client_add_task (self, NULL, NULL);
+	mpd_client_idle (self, 0);
+	return true;
+}
+
+#define MPD_SIMPLE(...) \
+	mpd_client_send_simple (&g_ctx.client, __VA_ARGS__, NULL)
 
 static bool
 app_process_action (enum action action)
@@ -1449,7 +1476,6 @@ app_process_action (enum action action)
 	if (tab->on_action && tab->on_action (action))
 		return true;
 
-	struct mpd_client *c = &g_ctx.client;
 	switch (action)
 	{
 	case ACTION_QUIT:
@@ -1471,25 +1497,24 @@ app_process_action (enum action action)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	case ACTION_MPD_PREVIOUS:
-		MPD_SIMPLE ("previous")
+		MPD_SIMPLE ("previous");
 		break;
 	case ACTION_MPD_TOGGLE:
-		if      (g_ctx.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1")
-		else if (g_ctx.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0")
-		else                                    MPD_SIMPLE ("play")
+		if      (g_ctx.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1");
+		else if (g_ctx.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0");
+		else                                    MPD_SIMPLE ("play");
 		break;
 	case ACTION_MPD_STOP:
-		MPD_SIMPLE ("stop")
+		MPD_SIMPLE ("stop");
 		break;
 	case ACTION_MPD_NEXT:
-		MPD_SIMPLE ("next")
+		MPD_SIMPLE ("next");
 		break;
 	case ACTION_MPD_VOLUME_UP:
 		if (g_ctx.volume >= 0)
 		{
 			char *volume = xstrdup_printf ("%d", MIN (100, g_ctx.volume + 10));
-			// FIXME: if this breaks, it leaks "volume"
-			MPD_SIMPLE ("setvol", volume)
+			MPD_SIMPLE ("setvol", volume);
 			free (volume);
 		}
 		break;
@@ -1497,16 +1522,15 @@ app_process_action (enum action action)
 		if (g_ctx.volume >= 0)
 		{
 			char *volume = xstrdup_printf ("%d", MAX (0, g_ctx.volume - 10));
-			// FIXME: if this breaks, it leaks "volume"
-			MPD_SIMPLE ("setvol", volume)
+			MPD_SIMPLE ("setvol", volume);
 			free (volume);
 		}
 		break;
 
 	// TODO: relative seeks
 #if 0
-		MPD_SIMPLE (forward,  "seekcur", "+10", NULL)
-		MPD_SIMPLE (backward, "seekcur", "-10", NULL)
+		FORWARD:  MPD_SIMPLE ("seekcur", "+10");
+		BACKWARD: MPD_SIMPLE ("seekcur", "-10");
 #endif
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1587,15 +1611,11 @@ app_process_left_mouse_click (int line, int column, bool double_click)
 			return false;
 
 		float position = (float) gauge_offset / g_ctx.gauge_width;
-		struct mpd_client *c = &g_ctx.client;
-		if (c->state == MPD_CONNECTED && g_ctx.song_duration >= 1)
+		if (g_ctx.song_duration >= 1)
 		{
 			char *where = xstrdup_printf ("%f", position * g_ctx.song_duration);
-			mpd_client_send_command (c, "seekcur", where, NULL);
+			MPD_SIMPLE ("seekcur", where);
 			free (where);
-
-			mpd_client_add_task (c, NULL, NULL);
-			mpd_client_idle (c, 0);
 		}
 	}
 	else if (line == g_ctx.header_height - 1)
@@ -1795,20 +1815,17 @@ current_tab_on_action (enum action action)
 	if (self->item_selected < 0)
 		return false;
 
-	struct mpd_client *c = &g_ctx.client;
 	switch (action)
 	{
 		char *song;
 	case ACTION_CHOOSE:
 		song = xstrdup_printf ("%d", self->item_selected);
-		// FIXME: if this breaks, it leaks "volume"
-		MPD_SIMPLE ("play", song)
+		MPD_SIMPLE ("play", song);
 		free (song);
 		return true;
 	case ACTION_DELETE:
 		song = xstrdup_printf ("%d", self->item_selected);
-		// FIXME: if this breaks, it leaks "volume"
-		MPD_SIMPLE ("delete", song)
+		MPD_SIMPLE ("delete", song);
 		free (song);
 		return true;
 	default:
@@ -2027,7 +2044,7 @@ library_tab_on_action (enum action action)
 		case LIBRARY_ROOT:
 		case LIBRARY_UP:
 		case LIBRARY_DIR:  library_tab_reload (x.path); break;
-		case LIBRARY_FILE: MPD_SIMPLE ("add", x.path)   break;
+		case LIBRARY_FILE: MPD_SIMPLE ("add", x.path);  break;
 		default:           hard_assert (!"invalid item type");
 		}
 		return true;
@@ -2037,13 +2054,13 @@ library_tab_on_action (enum action action)
 			break;
 
 		MPD_SIMPLE ("clear");
-		MPD_SIMPLE ("add", x.path)
+		MPD_SIMPLE ("add", x.path);
 		return true;
 	case ACTION_MPD_ADD:
 		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
 			break;
 
-		MPD_SIMPLE ("add", x.path)
+		MPD_SIMPLE ("add", x.path);
 		return true;
 	default:
 		break;
