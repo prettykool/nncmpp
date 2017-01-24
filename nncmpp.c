@@ -1665,59 +1665,75 @@ static struct binding
 {
 	const char *key;                    ///< Key definition
 	enum action action;                 ///< Action to take
+	termo_key_t decoded;                ///< Decoded key definition
 }
 g_default_bindings[] =
 {
-	{ "Escape",     ACTION_QUIT               },
-	{ "q",          ACTION_QUIT               },
-	{ "C-l",        ACTION_REDRAW             },
-	{ "M-Tab",      ACTION_LAST_TAB           },
-	{ "F1",         ACTION_HELP_TAB           },
+	{ "Escape",     ACTION_QUIT,               {}},
+	{ "q",          ACTION_QUIT,               {}},
+	{ "C-l",        ACTION_REDRAW,             {}},
+	{ "M-Tab",      ACTION_LAST_TAB,           {}},
+	{ "F1",         ACTION_HELP_TAB,           {}},
 
-	{ "Home",       ACTION_GOTO_TOP           },
-	{ "End",        ACTION_GOTO_BOTTOM        },
-	{ "M-<",        ACTION_GOTO_TOP           },
-	{ "M->",        ACTION_GOTO_BOTTOM        },
-	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS },
-	{ "Down",       ACTION_GOTO_ITEM_NEXT     },
-	{ "k",          ACTION_GOTO_ITEM_PREVIOUS },
-	{ "j",          ACTION_GOTO_ITEM_NEXT     },
-	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS },
-	{ "PageDown",   ACTION_GOTO_PAGE_NEXT     },
-	{ "C-p",        ACTION_GOTO_ITEM_PREVIOUS },
-	{ "C-n",        ACTION_GOTO_ITEM_NEXT     },
-	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
-	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
+	{ "Home",       ACTION_GOTO_TOP,           {}},
+	{ "End",        ACTION_GOTO_BOTTOM,        {}},
+	{ "M-<",        ACTION_GOTO_TOP,           {}},
+	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
+	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS, {}},
+	{ "Down",       ACTION_GOTO_ITEM_NEXT,     {}},
+	{ "k",          ACTION_GOTO_ITEM_PREVIOUS, {}},
+	{ "j",          ACTION_GOTO_ITEM_NEXT,     {}},
+	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS, {}},
+	{ "PageDown",   ACTION_GOTO_PAGE_NEXT,     {}},
+	{ "C-p",        ACTION_GOTO_ITEM_PREVIOUS, {}},
+	{ "C-n",        ACTION_GOTO_ITEM_NEXT,     {}},
+	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS, {}},
+	{ "C-f",        ACTION_GOTO_PAGE_NEXT,     {}},
 
 	// Not sure how to set these up, they're pretty arbitrary so far
-	{ "Enter",      ACTION_CHOOSE             },
-	{ "Delete",     ACTION_DELETE             },
-	{ "a",          ACTION_MPD_ADD            },
-	{ "r",          ACTION_MPD_REPLACE        },
+	{ "Enter",      ACTION_CHOOSE,             {}},
+	{ "Delete",     ACTION_DELETE,             {}},
+	{ "a",          ACTION_MPD_ADD,            {}},
+	{ "r",          ACTION_MPD_REPLACE,        {}},
 
-	{ "Left",       ACTION_MPD_PREVIOUS       },
-	{ "Right",      ACTION_MPD_NEXT           },
-	{ "h",          ACTION_MPD_PREVIOUS       },
-	{ "l",          ACTION_MPD_NEXT           },
-	{ "Space",      ACTION_MPD_TOGGLE         },
-	{ "C-Space",    ACTION_MPD_STOP           },
-	{ "M-PageUp",   ACTION_MPD_VOLUME_UP      },
-	{ "M-PageDown", ACTION_MPD_VOLUME_DOWN    },
+	{ "Left",       ACTION_MPD_PREVIOUS,       {}},
+	{ "Right",      ACTION_MPD_NEXT,           {}},
+	{ "h",          ACTION_MPD_PREVIOUS,       {}},
+	{ "l",          ACTION_MPD_NEXT,           {}},
+	{ "Space",      ACTION_MPD_TOGGLE,         {}},
+	{ "C-Space",    ACTION_MPD_STOP,           {}},
+	{ "M-PageUp",   ACTION_MPD_VOLUME_UP,      {}},
+	{ "M-PageDown", ACTION_MPD_VOLUME_DOWN,    {}},
 };
+
+static int
+app_binding_cmp (const void *a, const void *b)
+{
+	return termo_keycmp (g_ctx.tk,
+		&((struct binding *) a)->decoded, &((struct binding *) b)->decoded);
+}
+
+static void
+app_init_bindings (void)
+{
+	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
+	{
+		struct binding *binding = &g_default_bindings[i];
+		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk,
+			binding->key, &binding->decoded, TERMO_FORMAT_ALTISMETA));
+	}
+	qsort (g_default_bindings, N_ELEMENTS (g_default_bindings),
+		sizeof *g_default_bindings, app_binding_cmp);
+}
 
 static bool
 app_process_termo_event (termo_key_t *event)
 {
-	// TODO: pre-parse the keys, order them by termo_keycmp() and binary search
-	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
-	{
-		struct binding *binding = &g_default_bindings[i];
-		termo_key_t key;
-		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk, binding->key, &key,
-			TERMO_FORMAT_ALTISMETA));
-		if (!termo_keycmp (g_ctx.tk, event, &key))
-			return app_process_action (binding->action);
-	}
+	struct binding dummy = { NULL, 0, *event }, *binding =
+		bsearch (&dummy, g_default_bindings, N_ELEMENTS (g_default_bindings),
+			sizeof *g_default_bindings, app_binding_cmp);
+	if (binding)
+		return app_process_action (binding->action);
 
 	// TODO: parametrize actions, put this among other bindings
 	if (!(event->modifiers & ~TERMO_KEYMOD_ALT)
@@ -3037,6 +3053,7 @@ main (int argc, char *argv[])
 	app_init_terminal ();
 	signals_setup_handlers ();
 	app_init_poller_events ();
+	app_init_bindings ();
 
 	if (g_debug_mode)
 		app_prepend_tab (debug_tab_init ());
