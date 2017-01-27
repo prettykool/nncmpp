@@ -518,8 +518,8 @@ item_list_resize (struct item_list *self, size_t len)
 // The user interface is focused on conceptual simplicity.  That is important
 // since we're not using any TUI framework (which are mostly a lost cause to me
 // in the post-Unicode era and not worth pursuing), and the code would get
-// bloated and incomprehensible fast.  We mostly rely on app_add_utf8_string()
-// to write text from left to right row after row while keeping track of cells.
+// bloated and incomprehensible fast.  We mostly rely on "row_buffer" to write
+// text from left to right row after row while keeping track of cells.
 //
 // There is an independent top pane displaying general status information,
 // followed by a tab bar and a listview served by a per-tab event handler.
@@ -1446,7 +1446,7 @@ mpd_client_vsend_command (struct mpd_client *self, va_list ap)
 }
 
 /// Send a command to MPD without caring about the response
-static bool mpd_client_send_simple (struct mpd_client *c, ...)
+static bool mpd_client_send_simple (struct mpd_client *self, ...)
 	ATTRIBUTE_SENTINEL;
 
 static bool
