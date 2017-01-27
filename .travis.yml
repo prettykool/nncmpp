@@ -6,6 +6,12 @@ notifications:
   channels: "irc.janouch.name#dev"
   use_notice: true
   skip_join: true
+  template:
+   - "%{repository_name}#%{build_number} on %{branch}: %{message}"
+   - "  %{compare_url}"
+   - "  %{build_url}"
+  on_success: change
+  on_failure: always
 env:
  global:
   - secure: "fhbDocsjqrIMNRvC7x8oOynjEvysmjeLa1J0/ilJ8/LWo1tAbw5I7zvly/bHai142JbezcIGkKjgoNybR6ntr7QCaKZRd21eoU8xxi44GqweZD4/+DnyrswNc8Eg1VpCtuEaQwmJjdb7muGwmvdwqXf6fQAoV+3k44ihi67K/D9mpEOg7idkhE7bJpB3p0dfcc0iBXfDpC/z80YmiyJmyZU1qFKjeez8el3UuFRtrrC3C5jDUPlSbpA4Q3HCye/qwApskzEpzNzr19ivdAjS3oI31nyGB7fLZnC20Svh65mF2NIsnjNkxr1mNaz4iJl6Sx+VWodEdsLTX3QhM7+OkHZnLOSoq8vyaMvFhleByQ8z4ozowdnNdk8boVczDP4x+gxgnOzaC/dDSe69dTdA1tRexSg+kiKiSmiLf4GoZezSWPCJPryu/CP985yU386UpCyf0N9y6dZLHjCjtEsyEaP5u49bDoukgxgpIZg82JHNp093NPltf33Nz0bIA4xt4VA2t1VIg/6u3IvP+m9Vy+p2i0BjwJjd2agDeRSHUryPN/wuuxjmP4Q9I3Dagiln0GujfUJIUZL7yCS3EEYjsG/11jz5CZXdgXv7o6a2WTq3X0iL0WBfrngpHZOzyo53qwzC4jguz5H/ashGTP0QMzmcwLQUAZaDhhwnhuuBXao="
