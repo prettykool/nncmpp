@@ -2507,9 +2507,30 @@ debug_tab_init (void)
 // --- MPD interface -----------------------------------------------------------
 
 static void
+mpd_read_time (const char *value, int *sec, int *optional_msec)
+{
+	if (!value)
+		return;
+
+	char *end, *period = strchr (value, '.');
+	if (optional_msec && period)
+	{
+		unsigned long n = strtoul (period + 1, &end, 10);
+		if (*end)
+			return;
+		*optional_msec = MIN (INT_MAX, n);
+	}
+	unsigned long n = strtoul (value, &end, 10);
+	if (end == period || !*end)
+		*sec = MIN (INT_MAX, n);
+}
+
+static void
 mpd_update_playback_state (void)
 {
 	struct str_map *map = &g_ctx.playback_info;
+	g_ctx.song_elapsed = g_ctx.song_duration = g_ctx.volume = g_ctx.song = -1;
+	g_ctx.playlist_version = 0;
 
 	const char *state;
 	g_ctx.state = PLAYER_PLAYING;
@@ -2521,39 +2542,29 @@ mpd_update_playback_state (void)
 			g_ctx.state = PLAYER_PAUSED;
 	}
 
-	// The contents of these values overlap and we try to get what we can
-	// FIXME: don't change the values, for fuck's sake
-	char *time     = str_map_find (map, "time");
-	char *duration = str_map_find (map, "duration");
-	char *elapsed  = str_map_find (map, "elapsed");
+	// Values in "time" are always rounded.  "elapsed", introduced in MPD 0.16,
+	// is in millisecond precision and "duration" as well, starting with 0.20.
+	// Prefer the more precise values but use what we have.
+	const char *time     = str_map_find (map, "time");
+	const char *elapsed  = str_map_find (map, "elapsed");
+	const char *duration = str_map_find (map, "duration");
+
+	struct strv fields;
+	strv_init (&fields);
 	if (time)
 	{
-		char *colon = strchr (time, ':');
-		if (colon)
-		{
-			*colon = '\0';
-			duration = colon + 1;
-		}
+		cstr_split (time, ":", false, &fields);
+		if (fields.len >= 1 && !elapsed)   elapsed  = fields.vector[0];
+		if (fields.len >= 2 && !duration)  duration = fields.vector[1];
 	}
 
-	unsigned long n;
-	if (time     && xstrtoul (&n, time,     10))  g_ctx.song_elapsed  = n;
-	if (duration && xstrtoul (&n, duration, 10))  g_ctx.song_duration = n;
+	int msec_past_second = 0;
+	mpd_read_time (elapsed,  &g_ctx.song_elapsed,  &msec_past_second);
+	mpd_read_time (duration, &g_ctx.song_duration, NULL);
+	strv_free (&fields);
 
 	// We could also just poll the server each half a second but let's not
-	int msec_past_second = 0;
-
-	char *period;
-	if (elapsed && (period = strchr (elapsed, '.')))
-	{
-		// For some reason this is much more precise
-		*period++ = '\0';
-		if (xstrtoul (&n, elapsed, 10))
-			g_ctx.song_elapsed = n;
-
-		if (xstrtoul (&n, period, 10))
-			msec_past_second = n;
-	}
+	poller_timer_reset (&g_ctx.elapsed_event);
 	if (g_ctx.state == PLAYER_PLAYING)
 	{
 		poller_timer_set (&g_ctx.elapsed_event, 1000 - msec_past_second);
@@ -2561,10 +2572,13 @@ mpd_update_playback_state (void)
 	}
 
 	// The server sends -1 when nothing is being played right now
+	unsigned long n;
 	if (xstrtoul_map (map, "volume",   &n))  g_ctx.volume           = n;
 
 	if (xstrtoul_map (map, "playlist", &n))  g_ctx.playlist_version = n;
 	if (xstrtoul_map (map, "song",     &n))  g_ctx.song             = n;
+
+	app_invalidate ();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2614,16 +2628,8 @@ mpd_on_info_response (const struct mpd_response *response,
 {
 	(void) user_data;
 
-	// TODO: do this also on disconnect
-	g_ctx.song = -1;
-	g_ctx.song_elapsed = -1;
-	g_ctx.song_duration = -1;
-	g_ctx.volume = -1;
-	str_map_free (&g_ctx.playback_info);
-	poller_timer_reset (&g_ctx.elapsed_event);
-	g_ctx.playlist_version = 0;
 	// TODO: preset an error player state?
-
+	str_map_free (&g_ctx.playback_info);
 	if (!response->success)
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
@@ -2635,7 +2641,6 @@ mpd_on_info_response (const struct mpd_response *response,
 	mpd_update_playback_state ();
 	current_tab_update ();
 	info_tab_update ();
-	app_invalidate ();
 }
 
 static void
@@ -2740,6 +2745,9 @@ mpd_on_failure (void *user_data)
 	// This is also triggered both by a failed connect and a clean disconnect
 	print_error ("connection to MPD failed");
 	mpd_queue_reconnect ();
+
+	// TODO: reset all state related to the connection and update the UI:
+	//   str_map_free(&g_ctx.playback_info), mpd_update_playback_state()?
 }
 
 static void
