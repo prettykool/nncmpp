@@ -943,9 +943,8 @@ app_draw_song_info (void)
 	if (!(map = item_list_get (&g_ctx.playlist, g_ctx.song)))
 		return;
 
-	// XXX: can we get rid of this and still make it look acceptable?
-	chtype a_normal    = APP_ATTR (HEADER);
-	chtype a_highlight = APP_ATTR (HIGHLIGHT);
+	chtype attr_header    = APP_ATTR (HEADER);
+	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
 
 	char *title;
 	if ((title = compact_map_find (map, "title"))
@@ -954,8 +953,8 @@ app_draw_song_info (void)
 	{
 		struct row_buffer buf;
 		row_buffer_init (&buf);
-		row_buffer_append (&buf, title, a_highlight);
-		app_flush_header (&buf, a_highlight);
+		row_buffer_append (&buf, title, attr_highlight);
+		app_flush_header (&buf, attr_highlight);
 	}
 
 	char *artist = compact_map_find (map, "artist");
@@ -967,12 +966,12 @@ app_draw_song_info (void)
 	row_buffer_init (&buf);
 
 	if (artist)
-		row_buffer_append_args (&buf, " by "   + !buf.total_width, a_normal,
-			artist, a_highlight, NULL);
+		row_buffer_append_args (&buf, " by "   + !buf.total_width, attr_header,
+			artist, attr_highlight, NULL);
 	if (album)
-		row_buffer_append_args (&buf, " from " + !buf.total_width, a_normal,
-			album, a_highlight, NULL);
-	app_flush_header (&buf, a_normal);
+		row_buffer_append_args (&buf, " from " + !buf.total_width, attr_header,
+			album,  attr_highlight, NULL);
+	app_flush_header (&buf, attr_header);
 }
 
 static char *
@@ -1034,40 +1033,39 @@ app_draw_status (void)
 	if (g_ctx.state != PLAYER_STOPPED)
 		app_draw_song_info ();
 
-	// XXX: can we get rid of this and still make it look acceptable?
-	chtype a_normal    = APP_ATTR (HEADER);
-	chtype a_highlight = APP_ATTR (HIGHLIGHT);
+	chtype attr_header    = APP_ATTR (HEADER);
+	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
 
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
 	bool stopped = g_ctx.state == PLAYER_STOPPED;
-	chtype a_song_action = stopped ? a_normal : a_highlight;
+	chtype attr_song_action = stopped ? attr_header : attr_highlight;
 
 	const char *toggle = g_ctx.state == PLAYER_PLAYING ? "||" : "|>";
 	row_buffer_append_args (&buf,
-		"<<",   a_song_action, " ",  a_normal,
-		toggle, a_highlight,   " ",  a_normal,
-		"[]",   a_song_action, " ",  a_normal,
-		">>",   a_song_action, "  ", a_normal,
+		"<<",   attr_song_action, " ",  attr_header,
+		toggle, attr_highlight,   " ",  attr_header,
+		"[]",   attr_song_action, " ",  attr_header,
+		">>",   attr_song_action, "  ", attr_header,
 		NULL);
 
 	if (stopped)
-		row_buffer_append (&buf, "Stopped", a_normal);
+		row_buffer_append (&buf, "Stopped", attr_header);
 	else
 	{
 		if (g_ctx.song_elapsed >= 0)
 		{
-			app_write_time (&buf, g_ctx.song_elapsed, a_normal);
-			row_buffer_append (&buf, " ", a_normal);
+			app_write_time (&buf, g_ctx.song_elapsed, attr_header);
+			row_buffer_append (&buf, " ", attr_header);
 		}
 		if (g_ctx.song_duration >= 1)
 		{
-			row_buffer_append (&buf, "/ ", a_normal);
-			app_write_time (&buf, g_ctx.song_duration, a_normal);
-			row_buffer_append (&buf, " ", a_normal);
+			row_buffer_append (&buf, "/ ", attr_header);
+			app_write_time (&buf, g_ctx.song_duration, attr_header);
+			row_buffer_append (&buf, " ", attr_header);
 		}
-		row_buffer_append (&buf, " ", a_normal);
+		row_buffer_append (&buf, " ", attr_header);
 	}
 
 	// It gets a bit complicated due to the only right-aligned item on the row
@@ -1088,15 +1086,15 @@ app_draw_status (void)
 			(float) g_ctx.song_elapsed / g_ctx.song_duration, remaining);
 	}
 	else
-		row_buffer_space (&buf, remaining, a_normal);
+		row_buffer_space (&buf, remaining, attr_header);
 
 	if (volume)
 	{
-		row_buffer_append (&buf, volume, a_normal);
+		row_buffer_append (&buf, volume, attr_header);
 		free (volume);
 	}
 	g_ctx.controls_offset = g_ctx.header_height;
-	app_flush_header (&buf, a_normal);
+	app_flush_header (&buf, attr_header);
 }
 
 static void
@@ -1123,24 +1121,22 @@ app_draw_header (void)
 		app_write_line ("Disconnected", APP_ATTR (HEADER));
 	}
 
-	// XXX: can we get rid of this and still make it look acceptable?
-	chtype a_normal = APP_ATTR (TAB_BAR);
-	chtype a_active = APP_ATTR (TAB_ACTIVE);
+	chtype attrs[2] = { APP_ATTR (TAB_BAR), APP_ATTR (TAB_ACTIVE) };
 
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
 	// The help tab is disguised so that it's not too intruding
 	row_buffer_append (&buf, APP_TITLE,
-		g_ctx.active_tab == g_ctx.help_tab ? a_active : a_normal);
-	row_buffer_append (&buf, " ", a_normal);
+		attrs[g_ctx.active_tab == g_ctx.help_tab]);
+	row_buffer_append (&buf, " ", attrs[false]);
 
 	LIST_FOR_EACH (struct tab, iter, g_ctx.tabs)
 	{
 		row_buffer_append (&buf, iter->name,
-			iter == g_ctx.active_tab ? a_active : a_normal);
+			attrs[iter == g_ctx.active_tab]);
 	}
-	app_flush_header (&buf, a_normal);
+	app_flush_header (&buf, attrs[false]);
 }
 
 static int
