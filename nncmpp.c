@@ -2534,10 +2534,10 @@ mpd_update_playback_state (void)
 	g.playlist_version = 0;
 
 	const char *state;
-	g.state = PLAYER_PLAYING;
+	g.state = PLAYER_STOPPED;
 	if ((state = str_map_find (map, "state")))
 	{
-		if (!strcmp (state, "stop"))   g.state = PLAYER_STOPPED;
+		if (!strcmp (state, "play"))   g.state = PLAYER_PLAYING;
 		if (!strcmp (state, "pause"))  g.state = PLAYER_PAUSED;
 	}
 
@@ -2627,6 +2627,7 @@ mpd_on_info_response (const struct mpd_response *response,
 	// TODO: preset an error player state?
 	str_map_clear (&g.playback_info);
 	if (!response->success)
+		// TODO: we should print that out visibly (permission errors)
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
 	else if (!data->len)
