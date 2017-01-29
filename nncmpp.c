@@ -2743,11 +2743,15 @@ mpd_on_failure (void *user_data)
 {
 	(void) user_data;
 	// This is also triggered both by a failed connect and a clean disconnect
-	print_error ("connection to MPD failed");
+	print_debug ("connection to MPD failed");
 	mpd_queue_reconnect ();
 
-	// TODO: reset all state related to the connection and update the UI:
-	//   str_map_free(&g_ctx.playback_info), mpd_update_playback_state()?
+	item_list_resize (&g_ctx.playlist, 0);
+	str_map_free (&g_ctx.playback_info);
+	mpd_update_playback_state ();
+
+	current_tab_update ();
+	info_tab_update ();
 }
 
 static void
