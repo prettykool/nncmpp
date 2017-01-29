@@ -811,6 +811,10 @@ app_init_context (void)
 	strv_init (&g.streams);
 	item_list_init (&g.playlist);
 
+	str_map_init (&g.playback_info);
+	g.playback_info.key_xfrm = tolower_ascii_strxfrm;
+	g.playback_info.free = free;
+
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
 	// Note that non-Unicode locales are handled pretty inefficiently.
@@ -2581,10 +2585,7 @@ mpd_update_playback_state (void)
 static void
 mpd_process_info (const struct strv *data)
 {
-	struct str_map map;
-	str_map_init (&map);
-	map.key_xfrm = tolower_ascii_strxfrm;
-	map.free = free;
+	struct str_map *map = &g.playback_info;
 
 	// First there's the status, followed by playlist items chunked by "file"
 	unsigned long n; char *key, *value;
@@ -2595,26 +2596,26 @@ mpd_process_info (const struct strv *data)
 		if (!strcasecmp_ascii (key, "playlistlength")
 			&& xstrtoul (&n, value, 10))
 			item_list_resize (&g.playlist, n);
-		str_map_set (&map, key, xstrdup (value));
+		str_map_set (map, key, xstrdup (value));
 	}
-	g.playback_info = map;
 
 	// It's much better to process the playlist from the back
-	str_map_init (&map);
-	map.key_xfrm = tolower_ascii_strxfrm;
+	struct str_map item;
+	str_map_init (&item);
+	item.key_xfrm = tolower_ascii_strxfrm;
 	for (size_t i = data->len - 1; i-- && data->vector[i]; )
 	{
 		if (!(key = mpd_parse_kv (data->vector[i], &value)))
 			continue;
-		str_map_set (&map, key, value);
+		str_map_set (&item, key, value);
 		if (!strcasecmp_ascii (key, "file"))
 		{
-			if (xstrtoul_map (&map, "pos", &n))
-				item_list_set (&g.playlist, n, &map);
-			str_map_clear (&map);
+			if (xstrtoul_map (&item, "pos", &n))
+				item_list_set (&g.playlist, n, &item);
+			str_map_clear (&item);
 		}
 	}
-	str_map_free (&map);
+	str_map_free (&item);
 }
 
 static void
@@ -2624,7 +2625,7 @@ mpd_on_info_response (const struct mpd_response *response,
 	(void) user_data;
 
 	// TODO: preset an error player state?
-	str_map_free (&g.playback_info);
+	str_map_clear (&g.playback_info);
 	if (!response->success)
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
@@ -2742,7 +2743,7 @@ mpd_on_failure (void *user_data)
 	mpd_queue_reconnect ();
 
 	item_list_resize (&g.playlist, 0);
-	str_map_free (&g.playback_info);
+	str_map_clear (&g.playback_info);
 	mpd_update_playback_state ();
 
 	current_tab_update ();
