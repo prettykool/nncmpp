@@ -1136,10 +1136,16 @@ app_draw_header (void)
 }
 
 static int
+app_fitting_items (void)
+{
+	// The raw number of items that would have fit on the terminal
+	return LINES - g.header_height;
+}
+
+static int
 app_visible_items (void)
 {
-	// This may eventually include a header bar and/or a status bar
-	return MAX (0, LINES - g.header_height);
+	return MAX (0, app_fitting_items ());
 }
 
 static void
@@ -1220,8 +1226,8 @@ app_draw_view (void)
 	bool want_scrollbar = (int) tab->item_count > app_visible_items ();
 	int view_width = COLS - want_scrollbar;
 
-	int to_show = MIN (LINES - g.header_height,
-		(int) tab->item_count - tab->item_top);
+	int to_show =
+		MIN (app_fitting_items (), (int) tab->item_count - tab->item_top);
 	for (int row = 0; row < to_show; row++)
 	{
 		int item_index = tab->item_top + row;
@@ -1560,12 +1566,12 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll ((int) g.header_height - LINES);
-		app_move_selection ((int) g.header_height - LINES);
+		app_scroll (-app_fitting_items ());
+		app_move_selection (-app_fitting_items ());
 		break;
 	case ACTION_GOTO_PAGE_NEXT:
-		app_scroll (LINES - (int) g.header_height);
-		app_move_selection (LINES - (int) g.header_height);
+		app_scroll (app_fitting_items ());
+		app_move_selection (app_fitting_items ());
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
