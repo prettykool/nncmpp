@@ -63,7 +63,7 @@ settings = {
 	root       = "~/Music"
 }
 colors = {
-	header     = ""
+	normal     = ""
 	highlight  = "bold"
 	elapsed    = "reverse"
 	remains    = "ul"

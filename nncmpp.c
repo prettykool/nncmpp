@@ -23,7 +23,7 @@
 // We "need" to have an enum for attributes before including liberty.
 // Avoiding colours in the defaults here in order to support dumb terminals.
 #define ATTRIBUTE_TABLE(XX)                             \
-	XX( HEADER,     "header",     -1, -1, 0           ) \
+	XX( NORMAL,     "normal",     -1, -1, 0           ) \
 	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD      ) \
 	/* Gauge                                         */ \
 	XX( ELAPSED,    "elapsed",    -1, -1, A_REVERSE   ) \
@@ -943,7 +943,7 @@ app_draw_song_info (void)
 	if (!(map = item_list_get (&g.playlist, g.song)))
 		return;
 
-	chtype attr_header    = APP_ATTR (HEADER);
+	chtype attr_normal    = APP_ATTR (NORMAL);
 	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
 
 	char *title;
@@ -954,7 +954,7 @@ app_draw_song_info (void)
 		struct row_buffer buf;
 		row_buffer_init (&buf);
 		row_buffer_append (&buf, title, attr_highlight);
-		app_flush_header (&buf, attr_highlight);
+		app_flush_header (&buf, attr_normal);
 	}
 
 	char *artist = compact_map_find (map, "artist");
@@ -966,12 +966,12 @@ app_draw_song_info (void)
 	row_buffer_init (&buf);
 
 	if (artist)
-		row_buffer_append_args (&buf, " by "   + !buf.total_width, attr_header,
+		row_buffer_append_args (&buf, " by "   + !buf.total_width, attr_normal,
 			artist, attr_highlight, NULL);
 	if (album)
-		row_buffer_append_args (&buf, " from " + !buf.total_width, attr_header,
+		row_buffer_append_args (&buf, " from " + !buf.total_width, attr_normal,
 			album,  attr_highlight, NULL);
-	app_flush_header (&buf, attr_header);
+	app_flush_header (&buf, attr_normal);
 }
 
 static char *
@@ -1033,39 +1033,39 @@ app_draw_status (void)
 	if (g.state != PLAYER_STOPPED)
 		app_draw_song_info ();
 
-	chtype attr_header    = APP_ATTR (HEADER);
+	chtype attr_normal    = APP_ATTR (NORMAL);
 	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
 
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
 	bool stopped = g.state == PLAYER_STOPPED;
-	chtype attr_song_action = stopped ? attr_header : attr_highlight;
+	chtype attr_song_action = stopped ? attr_normal : attr_highlight;
 
 	const char *toggle = g.state == PLAYER_PLAYING ? "||" : "|>";
 	row_buffer_append_args (&buf,
-		"<<",   attr_song_action, " ",  attr_header,
-		toggle, attr_highlight,   " ",  attr_header,
-		"[]",   attr_song_action, " ",  attr_header,
-		">>",   attr_song_action, "  ", attr_header,
+		"<<",   attr_song_action, " ",  attr_normal,
+		toggle, attr_highlight,   " ",  attr_normal,
+		"[]",   attr_song_action, " ",  attr_normal,
+		">>",   attr_song_action, "  ", attr_normal,
 		NULL);
 
 	if (stopped)
-		row_buffer_append (&buf, "Stopped", attr_header);
+		row_buffer_append (&buf, "Stopped", attr_normal);
 	else
 	{
 		if (g.song_elapsed >= 0)
 		{
-			app_write_time (&buf, g.song_elapsed, attr_header);
-			row_buffer_append (&buf, " ", attr_header);
+			app_write_time (&buf, g.song_elapsed, attr_normal);
+			row_buffer_append (&buf, " ", attr_normal);
 		}
 		if (g.song_duration >= 1)
 		{
-			row_buffer_append (&buf, "/ ", attr_header);
-			app_write_time (&buf, g.song_duration, attr_header);
-			row_buffer_append (&buf, " ", attr_header);
+			row_buffer_append (&buf, "/ ", attr_normal);
+			app_write_time (&buf, g.song_duration, attr_normal);
+			row_buffer_append (&buf, " ", attr_normal);
 		}
-		row_buffer_append (&buf, " ", attr_header);
+		row_buffer_append (&buf, " ", attr_normal);
 	}
 
 	// It gets a bit complicated due to the only right-aligned item on the row
@@ -1086,15 +1086,15 @@ app_draw_status (void)
 			(float) g.song_elapsed / g.song_duration, remaining);
 	}
 	else
-		row_buffer_space (&buf, remaining, attr_header);
+		row_buffer_space (&buf, remaining, attr_normal);
 
 	if (volume)
 	{
-		row_buffer_append (&buf, volume, attr_header);
+		row_buffer_append (&buf, volume, attr_normal);
 		free (volume);
 	}
 	g.controls_offset = g.header_height;
-	app_flush_header (&buf, attr_header);
+	app_flush_header (&buf, attr_normal);
 }
 
 static void
@@ -1114,11 +1114,11 @@ app_draw_header (void)
 		break;
 	case MPD_CONNECTING:
 		move (g.header_height++, 0);
-		app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
+		app_write_line ("Connecting to MPD...", APP_ATTR (NORMAL));
 		break;
 	case MPD_DISCONNECTED:
 		move (g.header_height++, 0);
-		app_write_line ("Disconnected", APP_ATTR (HEADER));
+		app_write_line ("Disconnected", APP_ATTR (NORMAL));
 	}
 
 	chtype attrs[2] = { APP_ATTR (TAB_BAR), APP_ATTR (TAB_ACTIVE) };
