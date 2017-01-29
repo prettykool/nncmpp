@@ -629,10 +629,10 @@ static struct app_context
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
-g_ctx;
+g;
 
 /// Shortcut to retrieve named terminal attributes
-#define APP_ATTR(name) g_ctx.attrs[ATTRIBUTE_ ## name].attrs
+#define APP_ATTR(name) g.attrs[ATTRIBUTE_ ## name].attrs
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -711,7 +711,7 @@ load_config_colors (struct config_item *subtree, void *user_data)
 	const char *value;
 #define XX(name, config, fg_, bg_, attrs_) \
 	if ((value = get_config_string (subtree, config))) \
-		g_ctx.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
+		g.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 }
@@ -749,17 +749,17 @@ load_config_streams (struct config_item *subtree, void *user_data)
 			print_warning ("`%s': stream URIs must be strings", iter.link->key);
 		else
 		{
-			strv_append_owned (&g_ctx.streams, xstrdup_printf ("%s%c%s",
+			strv_append_owned (&g.streams, xstrdup_printf ("%s%c%s",
 				iter.link->key, 0, item->value.string.str));
 		}
-	qsort (g_ctx.streams.vector, g_ctx.streams.len,
-		sizeof *g_ctx.streams.vector, strv_sort_utf8_cb);
+	qsort (g.streams.vector, g.streams.len,
+		sizeof *g.streams.vector, strv_sort_utf8_cb);
 }
 
 static void
 app_load_configuration (void)
 {
-	struct config *config = &g_ctx.config;
+	struct config *config = &g.config;
 	config_register_module (config, "settings", load_config_settings, NULL);
 	config_register_module (config, "colors",   load_config_colors,   NULL);
 	config_register_module (config, "streams",  load_config_streams,  NULL);
@@ -784,8 +784,8 @@ app_load_configuration (void)
 	}
 	if (root)
 	{
-		config_load (&g_ctx.config, root);
-		config_schema_call_changed (g_ctx.config.root);
+		config_load (&g.config, root);
+		config_schema_call_changed (g.config.root);
 	}
 }
 
@@ -794,10 +794,10 @@ app_load_configuration (void)
 static void
 app_init_attributes (void)
 {
-#define XX(name, config, fg_, bg_, attrs_)          \
-	g_ctx.attrs[ATTRIBUTE_ ## name].fg    = fg_;    \
-	g_ctx.attrs[ATTRIBUTE_ ## name].bg    = bg_;    \
-	g_ctx.attrs[ATTRIBUTE_ ## name].attrs = attrs_;
+#define XX(name, config, fg_, bg_, attrs_)      \
+	g.attrs[ATTRIBUTE_ ## name].fg    = fg_;    \
+	g.attrs[ATTRIBUTE_ ## name].bg    = bg_;    \
+	g.attrs[ATTRIBUTE_ ## name].attrs = attrs_;
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 }
@@ -805,20 +805,20 @@ app_init_attributes (void)
 static void
 app_init_context (void)
 {
-	poller_init (&g_ctx.poller);
-	mpd_client_init (&g_ctx.client, &g_ctx.poller);
-	config_init (&g_ctx.config);
-	strv_init (&g_ctx.streams);
-	item_list_init (&g_ctx.playlist);
+	poller_init (&g.poller);
+	mpd_client_init (&g.client, &g.poller);
+	config_init (&g.config);
+	strv_init (&g.streams);
+	item_list_init (&g.playlist);
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
 	// Note that non-Unicode locales are handled pretty inefficiently.
-	g_ctx.locale_is_utf8 = !strcasecmp_ascii (locale_charset (), "UTF-8");
+	g.locale_is_utf8 = !strcasecmp_ascii (locale_charset (), "UTF-8");
 
 	// It doesn't work 100% (e.g. incompatible with undelining in urxvt)
 	// TODO: make this configurable
-	g_ctx.use_partial_boxes = g_ctx.locale_is_utf8;
+	g.use_partial_boxes = g.locale_is_utf8;
 
 	app_init_attributes ();
 }
@@ -827,7 +827,7 @@ static void
 app_init_terminal (void)
 {
 	TERMO_CHECK_VERSION;
-	if (!(g_ctx.tk = termo_new (STDIN_FILENO, NULL, 0)))
+	if (!(g.tk = termo_new (STDIN_FILENO, NULL, 0)))
 		abort ();
 	if (!initscr () || nonl () == ERR)
 		abort ();
@@ -844,48 +844,48 @@ app_init_terminal (void)
 	for (int a = 0; a < ATTRIBUTE_COUNT; a++)
 	{
 		// ...thus we can reset back to defaults even after initializing some
-		if (g_ctx.attrs[a].fg >= COLORS || g_ctx.attrs[a].fg < -1
-		 || g_ctx.attrs[a].bg >= COLORS || g_ctx.attrs[a].bg < -1)
+		if (g.attrs[a].fg >= COLORS || g.attrs[a].fg < -1
+		 || g.attrs[a].bg >= COLORS || g.attrs[a].bg < -1)
 		{
 			app_init_attributes ();
 			return;
 		}
 
-		init_pair (a + 1, g_ctx.attrs[a].fg, g_ctx.attrs[a].bg);
-		g_ctx.attrs[a].attrs |= COLOR_PAIR (a + 1);
+		init_pair (a + 1, g.attrs[a].fg, g.attrs[a].bg);
+		g.attrs[a].attrs |= COLOR_PAIR (a + 1);
 	}
 }
 
 static void
 app_free_context (void)
 {
-	mpd_client_free (&g_ctx.client);
-	str_map_free (&g_ctx.playback_info);
-	strv_free (&g_ctx.streams);
-	item_list_free (&g_ctx.playlist);
+	mpd_client_free (&g.client);
+	str_map_free (&g.playback_info);
+	strv_free (&g.streams);
+	item_list_free (&g.playlist);
 
-	config_free (&g_ctx.config);
-	poller_free (&g_ctx.poller);
+	config_free (&g.config);
+	poller_free (&g.poller);
 
-	if (g_ctx.tk)
-		termo_destroy (g_ctx.tk);
+	if (g.tk)
+		termo_destroy (g.tk);
 }
 
 static void
 app_quit (void)
 {
-	g_ctx.quitting = true;
+	g.quitting = true;
 
 	// TODO: bring down the MPD interface (if that's needed at all);
 	//   so far there's nothing for us to wait on, so let's just stop looping
-	g_ctx.polling = false;
+	g.polling = false;
 }
 
 static bool
 app_is_character_in_locale (ucs4_t ch)
 {
 	// Avoid the overhead joined with calling iconv() for all characters.
-	if (g_ctx.locale_is_utf8)
+	if (g.locale_is_utf8)
 		return true;
 
 	// The library really creates a new conversion object every single time
@@ -905,7 +905,7 @@ app_is_character_in_locale (ucs4_t ch)
 static void
 app_invalidate (void)
 {
-	poller_idle_set (&g_ctx.refresh_event);
+	poller_idle_set (&g.refresh_event);
 }
 
 static void
@@ -932,7 +932,7 @@ app_write_line (const char *str, chtype attrs)
 static void
 app_flush_header (struct row_buffer *buf, chtype attrs)
 {
-	move (g_ctx.header_height++, 0);
+	move (g.header_height++, 0);
 	app_flush_buffer (buf, COLS, attrs);
 }
 
@@ -940,7 +940,7 @@ static void
 app_draw_song_info (void)
 {
 	compact_map_t map;
-	if (!(map = item_list_get (&g_ctx.playlist, g_ctx.song)))
+	if (!(map = item_list_get (&g.playlist, g.song)))
 		return;
 
 	chtype attr_header    = APP_ATTR (HEADER);
@@ -1015,7 +1015,7 @@ app_write_gauge (struct row_buffer *buf, float ratio, int width)
 	len_left /= 8;
 
 	const char *partial = NULL;
-	if (g_ctx.use_partial_boxes)
+	if (g.use_partial_boxes)
 		partial = partials[remainder];
 	else
 		len_left += remainder >= (int) 4;
@@ -1030,7 +1030,7 @@ app_write_gauge (struct row_buffer *buf, float ratio, int width)
 static void
 app_draw_status (void)
 {
-	if (g_ctx.state != PLAYER_STOPPED)
+	if (g.state != PLAYER_STOPPED)
 		app_draw_song_info ();
 
 	chtype attr_header    = APP_ATTR (HEADER);
@@ -1039,10 +1039,10 @@ app_draw_status (void)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
-	bool stopped = g_ctx.state == PLAYER_STOPPED;
+	bool stopped = g.state == PLAYER_STOPPED;
 	chtype attr_song_action = stopped ? attr_header : attr_highlight;
 
-	const char *toggle = g_ctx.state == PLAYER_PLAYING ? "||" : "|>";
+	const char *toggle = g.state == PLAYER_PLAYING ? "||" : "|>";
 	row_buffer_append_args (&buf,
 		"<<",   attr_song_action, " ",  attr_header,
 		toggle, attr_highlight,   " ",  attr_header,
@@ -1054,15 +1054,15 @@ app_draw_status (void)
 		row_buffer_append (&buf, "Stopped", attr_header);
 	else
 	{
-		if (g_ctx.song_elapsed >= 0)
+		if (g.song_elapsed >= 0)
 		{
-			app_write_time (&buf, g_ctx.song_elapsed, attr_header);
+			app_write_time (&buf, g.song_elapsed, attr_header);
 			row_buffer_append (&buf, " ", attr_header);
 		}
-		if (g_ctx.song_duration >= 1)
+		if (g.song_duration >= 1)
 		{
 			row_buffer_append (&buf, "/ ", attr_header);
-			app_write_time (&buf, g_ctx.song_duration, attr_header);
+			app_write_time (&buf, g.song_duration, attr_header);
 			row_buffer_append (&buf, " ", attr_header);
 		}
 		row_buffer_append (&buf, " ", attr_header);
@@ -1071,19 +1071,19 @@ app_draw_status (void)
 	// It gets a bit complicated due to the only right-aligned item on the row
 	char *volume = NULL;
 	int remaining = COLS - buf.total_width;
-	if (g_ctx.volume >= 0)
+	if (g.volume >= 0)
 	{
-		volume = xstrdup_printf ("  %3d%%", g_ctx.volume);
+		volume = xstrdup_printf ("  %3d%%", g.volume);
 		remaining -= strlen (volume);
 	}
 
-	if (!stopped && g_ctx.song_elapsed >= 0 && g_ctx.song_duration >= 1
+	if (!stopped && g.song_elapsed >= 0 && g.song_duration >= 1
 	 && remaining > 0)
 	{
-		g_ctx.gauge_offset = buf.total_width;
-		g_ctx.gauge_width = remaining;
+		g.gauge_offset = buf.total_width;
+		g.gauge_width = remaining;
 		app_write_gauge (&buf,
-			(float) g_ctx.song_elapsed / g_ctx.song_duration, remaining);
+			(float) g.song_elapsed / g.song_duration, remaining);
 	}
 	else
 		row_buffer_space (&buf, remaining, attr_header);
@@ -1093,7 +1093,7 @@ app_draw_status (void)
 		row_buffer_append (&buf, volume, attr_header);
 		free (volume);
 	}
-	g_ctx.controls_offset = g_ctx.header_height;
+	g.controls_offset = g.header_height;
 	app_flush_header (&buf, attr_header);
 }
 
@@ -1101,23 +1101,23 @@ static void
 app_draw_header (void)
 {
 	// TODO: call app_fix_view_range() if it changes from the previous value
-	g_ctx.header_height = 0;
+	g.header_height = 0;
 
-	g_ctx.controls_offset = -1;
-	g_ctx.gauge_offset = -1;
-	g_ctx.gauge_width = 0;
+	g.controls_offset = -1;
+	g.gauge_offset = -1;
+	g.gauge_width = 0;
 
-	switch (g_ctx.client.state)
+	switch (g.client.state)
 	{
 	case MPD_CONNECTED:
 		app_draw_status ();
 		break;
 	case MPD_CONNECTING:
-		move (g_ctx.header_height++, 0);
+		move (g.header_height++, 0);
 		app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
 		break;
 	case MPD_DISCONNECTED:
-		move (g_ctx.header_height++, 0);
+		move (g.header_height++, 0);
 		app_write_line ("Disconnected", APP_ATTR (HEADER));
 	}
 
@@ -1127,15 +1127,11 @@ app_draw_header (void)
 	row_buffer_init (&buf);
 
 	// The help tab is disguised so that it's not too intruding
-	row_buffer_append (&buf, APP_TITLE,
-		attrs[g_ctx.active_tab == g_ctx.help_tab]);
+	row_buffer_append (&buf, APP_TITLE, attrs[g.active_tab == g.help_tab]);
 	row_buffer_append (&buf, " ", attrs[false]);
 
-	LIST_FOR_EACH (struct tab, iter, g_ctx.tabs)
-	{
-		row_buffer_append (&buf, iter->name,
-			attrs[iter == g_ctx.active_tab]);
-	}
+	LIST_FOR_EACH (struct tab, iter, g.tabs)
+		row_buffer_append (&buf, iter->name, attrs[iter == g.active_tab]);
 	app_flush_header (&buf, attrs[false]);
 }
 
@@ -1143,7 +1139,7 @@ static int
 app_visible_items (void)
 {
 	// This may eventually include a header bar and/or a status bar
-	return MAX (0, LINES - g_ctx.header_height);
+	return MAX (0, LINES - g.header_height);
 }
 
 static void
@@ -1155,10 +1151,10 @@ app_draw_scrollbar (void)
 	//
 	// We could also precompute the scrollbar and append it to each row
 	// as we render them, plus all the unoccupied rows.
-	struct tab *tab = g_ctx.active_tab;
+	struct tab *tab = g.active_tab;
 	int visible_items = app_visible_items ();
 
-	if (!g_ctx.use_partial_boxes)
+	if (!g.use_partial_boxes)
 	{
 		// Apparently here we don't want the 0.5 rounding constant
 		int length = (float) visible_items / (int) tab->item_count
@@ -1168,7 +1164,7 @@ app_draw_scrollbar (void)
 
 		for (int row = 0; row < visible_items; row++)
 		{
-			move (g_ctx.header_height + row, COLS - 1);
+			move (g.header_height + row, COLS - 1);
 			if (row < start || row > start + length + 1)
 				addch (' ' | APP_ATTR (SCROLLBAR));
 			else
@@ -1204,7 +1200,7 @@ app_draw_scrollbar (void)
 		if (row == start) c = partials[start_part];
 		if (row == end)   c = partials[end_part];
 
-		move (g_ctx.header_height + row, COLS - 1);
+		move (g.header_height + row, COLS - 1);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
@@ -1217,14 +1213,14 @@ app_draw_scrollbar (void)
 static void
 app_draw_view (void)
 {
-	move (g_ctx.header_height, 0);
+	move (g.header_height, 0);
 	clrtobot ();
 
-	struct tab *tab = g_ctx.active_tab;
+	struct tab *tab = g.active_tab;
 	bool want_scrollbar = (int) tab->item_count > app_visible_items ();
 	int view_width = COLS - want_scrollbar;
 
-	int to_show = MIN (LINES - g_ctx.header_height,
+	int to_show = MIN (LINES - g.header_height,
 		(int) tab->item_count - tab->item_top);
 	for (int row = 0; row < to_show; row++)
 	{
@@ -1250,7 +1246,7 @@ app_draw_view (void)
 				*attrs |=  row_attrs;
 		}
 
-		move (g_ctx.header_height + row, 0);
+		move (g.header_height + row, 0);
 		app_flush_buffer (&buf, view_width, row_attrs);
 	}
 
@@ -1262,7 +1258,7 @@ static void
 app_on_refresh (void *user_data)
 {
 	(void) user_data;
-	poller_idle_reset (&g_ctx.refresh_event);
+	poller_idle_reset (&g.refresh_event);
 
 	app_draw_header ();
 	app_draw_view ();
@@ -1276,7 +1272,7 @@ app_on_refresh (void *user_data)
 static bool
 app_fix_view_range (void)
 {
-	struct tab *tab = g_ctx.active_tab;
+	struct tab *tab = g.active_tab;
 	if (tab->item_top < 0)
 	{
 		tab->item_top = 0;
@@ -1302,7 +1298,7 @@ app_fix_view_range (void)
 static bool
 app_scroll (int n)
 {
-	g_ctx.active_tab->item_top += n;
+	g.active_tab->item_top += n;
 	app_invalidate ();
 	return app_fix_view_range ();
 }
@@ -1310,7 +1306,7 @@ app_scroll (int n)
 static void
 app_ensure_selection_visible (void)
 {
-	struct tab *tab = g_ctx.active_tab;
+	struct tab *tab = g.active_tab;
 	if (tab->item_selected < 0)
 		return;
 
@@ -1327,7 +1323,7 @@ app_ensure_selection_visible (void)
 static bool
 app_move_selection (int diff)
 {
-	struct tab *tab = g_ctx.active_tab;
+	struct tab *tab = g.active_tab;
 	int fixed = tab->item_selected += diff;
 	fixed = MAX (fixed, 0);
 	fixed = MIN (fixed, (int) tab->item_count - 1);
@@ -1345,18 +1341,18 @@ app_move_selection (int diff)
 static void
 app_prepend_tab (struct tab *tab)
 {
-	LIST_PREPEND (g_ctx.tabs, tab);
+	LIST_PREPEND (g.tabs, tab);
 	app_invalidate ();
 }
 
 static void
 app_switch_tab (struct tab *tab)
 {
-	if (tab == g_ctx.active_tab)
+	if (tab == g.active_tab)
 		return;
 
-	g_ctx.last_tab = g_ctx.active_tab;
-	g_ctx.active_tab = tab;
+	g.last_tab = g.active_tab;
+	g.active_tab = tab;
 	app_invalidate ();
 }
 
@@ -1364,7 +1360,7 @@ static bool
 app_goto_tab (int tab_index)
 {
 	int i = 0;
-	LIST_FOR_EACH (struct tab, iter, g_ctx.tabs)
+	LIST_FOR_EACH (struct tab, iter, g.tabs)
 		if (i++ == tab_index)
 		{
 			app_switch_tab (iter);
@@ -1462,13 +1458,13 @@ mpd_client_send_simple (struct mpd_client *self, ...)
 }
 
 #define MPD_SIMPLE(...) \
-	mpd_client_send_simple (&g_ctx.client, __VA_ARGS__, NULL)
+	mpd_client_send_simple (&g.client, __VA_ARGS__, NULL)
 
 static bool
 app_process_action (enum action action)
 {
 	// First let the tab try to handle this
-	struct tab *tab = g_ctx.active_tab;
+	struct tab *tab = g.active_tab;
 	if (tab->on_action && tab->on_action (action))
 		return true;
 
@@ -1482,12 +1478,12 @@ app_process_action (enum action action)
 		app_invalidate ();
 		break;
 	case ACTION_LAST_TAB:
-		if (!g_ctx.last_tab)
+		if (!g.last_tab)
 			return false;
-		app_switch_tab (g_ctx.last_tab);
+		app_switch_tab (g.last_tab);
 		break;
 	case ACTION_HELP_TAB:
-		app_switch_tab (g_ctx.help_tab);
+		app_switch_tab (g.help_tab);
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1496,9 +1492,9 @@ app_process_action (enum action action)
 		MPD_SIMPLE ("previous");
 		break;
 	case ACTION_MPD_TOGGLE:
-		if      (g_ctx.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1");
-		else if (g_ctx.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0");
-		else                                    MPD_SIMPLE ("play");
+		if      (g.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1");
+		else if (g.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0");
+		else                                MPD_SIMPLE ("play");
 		break;
 	case ACTION_MPD_STOP:
 		MPD_SIMPLE ("stop");
@@ -1507,17 +1503,17 @@ app_process_action (enum action action)
 		MPD_SIMPLE ("next");
 		break;
 	case ACTION_MPD_VOLUME_UP:
-		if (g_ctx.volume >= 0)
+		if (g.volume >= 0)
 		{
-			char *volume = xstrdup_printf ("%d", MIN (100, g_ctx.volume + 10));
+			char *volume = xstrdup_printf ("%d", MIN (100, g.volume + 10));
 			MPD_SIMPLE ("setvol", volume);
 			free (volume);
 		}
 		break;
 	case ACTION_MPD_VOLUME_DOWN:
-		if (g_ctx.volume >= 0)
+		if (g.volume >= 0)
 		{
-			char *volume = xstrdup_printf ("%d", MAX (0, g_ctx.volume - 10));
+			char *volume = xstrdup_printf ("%d", MAX (0,   g.volume - 10));
 			MPD_SIMPLE ("setvol", volume);
 			free (volume);
 		}
@@ -1542,7 +1538,7 @@ app_process_action (enum action action)
 	case ACTION_GOTO_TOP:
 		if (tab->item_count)
 		{
-			g_ctx.active_tab->item_selected = 0;
+			g.active_tab->item_selected = 0;
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
@@ -1550,8 +1546,7 @@ app_process_action (enum action action)
 	case ACTION_GOTO_BOTTOM:
 		if (tab->item_count)
 		{
-			g_ctx.active_tab->item_selected =
-				(int) g_ctx.active_tab->item_count - 1;
+			g.active_tab->item_selected = (int) g.active_tab->item_count - 1;
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
@@ -1565,12 +1560,12 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll ((int) g_ctx.header_height - LINES);
-		app_move_selection ((int) g_ctx.header_height - LINES);
+		app_scroll ((int) g.header_height - LINES);
+		app_move_selection ((int) g.header_height - LINES);
 		break;
 	case ACTION_GOTO_PAGE_NEXT:
-		app_scroll (LINES - (int) g_ctx.header_height);
-		app_move_selection (LINES - (int) g_ctx.header_height);
+		app_scroll (LINES - (int) g.header_height);
+		app_move_selection (LINES - (int) g.header_height);
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1588,7 +1583,7 @@ app_process_action (enum action action)
 static bool
 app_process_left_mouse_click (int line, int column, bool double_click)
 {
-	if (line == g_ctx.controls_offset)
+	if (line == g.controls_offset)
 	{
 		// XXX: there could be a push_widget(buf, text, attrs, handler)
 		//   function to help with this but it might not be worth it
@@ -1601,29 +1596,29 @@ app_process_left_mouse_click (int line, int column, bool double_click)
 		if (action)
 			return app_process_action (action);
 
-		int gauge_offset = column - g_ctx.gauge_offset;
-		if (g_ctx.gauge_offset < 0
-		 || gauge_offset < 0 || gauge_offset >= g_ctx.gauge_width)
+		int gauge_offset = column - g.gauge_offset;
+		if (g.gauge_offset < 0
+		 || gauge_offset < 0 || gauge_offset >= g.gauge_width)
 			return false;
 
-		float position = (float) gauge_offset / g_ctx.gauge_width;
-		if (g_ctx.song_duration >= 1)
+		float position = (float) gauge_offset / g.gauge_width;
+		if (g.song_duration >= 1)
 		{
-			char *where = xstrdup_printf ("%f", position * g_ctx.song_duration);
+			char *where = xstrdup_printf ("%f", position * g.song_duration);
 			MPD_SIMPLE ("seekcur", where);
 			free (where);
 		}
 	}
-	else if (line == g_ctx.header_height - 1)
+	else if (line == g.header_height - 1)
 	{
 		struct tab *winner = NULL;
 		int indent = strlen (APP_TITLE);
 		if (column < indent)
 		{
-			app_switch_tab (g_ctx.help_tab);
+			app_switch_tab (g.help_tab);
 			return true;
 		}
-		for (struct tab *iter = g_ctx.tabs; !winner && iter; iter = iter->next)
+		for (struct tab *iter = g.tabs; !winner && iter; iter = iter->next)
 		{
 			if (column < (indent += iter->name_width))
 				winner = iter;
@@ -1635,8 +1630,8 @@ app_process_left_mouse_click (int line, int column, bool double_click)
 	}
 	else
 	{
-		struct tab *tab = g_ctx.active_tab;
-		int row_index = line - g_ctx.header_height;
+		struct tab *tab = g.active_tab;
+		int row_index = line - g.header_height;
 		if (row_index < 0
 		 || row_index >= (int) tab->item_count - tab->item_top)
 			return false;
@@ -1725,7 +1720,7 @@ g_default_bindings[] =
 static int
 app_binding_cmp (const void *a, const void *b)
 {
-	return termo_keycmp (g_ctx.tk,
+	return termo_keycmp (g.tk,
 		&((struct binding *) a)->decoded, &((struct binding *) b)->decoded);
 }
 
@@ -1735,7 +1730,7 @@ app_init_bindings (void)
 	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
 	{
 		struct binding *binding = &g_default_bindings[i];
-		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk,
+		hard_assert (!*termo_strpkey_utf8 (g.tk,
 			binding->key, &binding->decoded, TERMO_FORMAT_ALTISMETA));
 	}
 	qsort (g_default_bindings, N_ELEMENTS (g_default_bindings),
@@ -1779,11 +1774,11 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	// TODO: configurable output, maybe dynamically sized columns
 	int length_len = 1 /*separator */ + 2 /* h */ + 3 /* m */+ 3 /* s */;
 
-	compact_map_t map = item_list_get (&g_ctx.playlist, item_index);
+	compact_map_t map = item_list_get (&g.playlist, item_index);
 	const char *artist = compact_map_find (map, "artist");
 	const char *title  = compact_map_find (map, "title");
 
-	chtype attrs = (int) item_index == g_ctx.song ? A_BOLD : 0;
+	chtype attrs = (int) item_index == g.song ? A_BOLD : 0;
 	if (artist && title)
 		row_buffer_append_args (buffer,
 			artist, attrs, " - ", attrs, title, attrs, NULL);
@@ -1807,7 +1802,7 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 static bool
 current_tab_on_action (enum action action)
 {
-	struct tab *self = g_ctx.active_tab;
+	struct tab *self = g.active_tab;
 	if (self->item_selected < 0)
 		return false;
 
@@ -1833,7 +1828,7 @@ current_tab_on_action (enum action action)
 static void
 current_tab_update (void)
 {
-	g_current_tab.super.item_count = g_ctx.playlist.len;
+	g_current_tab.super.item_count = g.playlist.len;
 	app_fix_view_range ();
 	app_invalidate ();
 }
@@ -2013,7 +2008,7 @@ library_tab_reload (const char *new_path)
 		str_append (path, new_path);
 	}
 
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 	mpd_client_send_command (c, "lsinfo", path->len ? path->str : "/", NULL);
 	mpd_client_add_task (c, library_tab_on_data, NULL);
 	mpd_client_idle (c, 0);
@@ -2022,11 +2017,11 @@ library_tab_reload (const char *new_path)
 static bool
 library_tab_on_action (enum action action)
 {
-	struct tab *self = g_ctx.active_tab;
+	struct tab *self = g.active_tab;
 	if (self->item_selected < 0)
 		return false;
 
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 	if (c->state != MPD_CONNECTED)
 		return false;
 
@@ -2172,7 +2167,7 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 		return;
 	}
 
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 	if (c->state != MPD_CONNECTED)
 		return;
 
@@ -2287,12 +2282,12 @@ error:
 static bool
 streams_tab_on_action (enum action action)
 {
-	struct tab *self = g_ctx.active_tab;
+	struct tab *self = g.active_tab;
 	if (self->item_selected < 0)
 		return false;
 
 	// For simplicity the URL is the string following the stream name
-	const char *uri = 1 + strchr (g_ctx.streams.vector[self->item_selected], 0);
+	const char *uri = 1 + strchr (g.streams.vector[self->item_selected], 0);
 
 	// TODO: show any error to the user
 	switch (action)
@@ -2314,7 +2309,7 @@ streams_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	int width)
 {
 	(void) width;
-	row_buffer_append (buffer, g_ctx.streams.vector[item_index], 0);
+	row_buffer_append (buffer, g.streams.vector[item_index], 0);
 }
 
 static struct tab *
@@ -2324,7 +2319,7 @@ streams_tab_init (void)
 	tab_init (&super, "Streams");
 	super.on_action = streams_tab_on_action;
 	super.on_item_draw = streams_tab_on_item_draw;
-	super.item_count = g_ctx.streams.len;
+	super.item_count = g.streams.len;
 	return &super;
 }
 
@@ -2376,7 +2371,7 @@ info_tab_update (void)
 	g_info_tab.super.item_count = 0;
 
 	compact_map_t map;
-	if ((map = item_list_get (&g_ctx.playlist, g_ctx.song)))
+	if ((map = item_list_get (&g.playlist, g.song)))
 	{
 		info_tab_add (map, "Title");
 		info_tab_add (map, "Artist");
@@ -2524,18 +2519,16 @@ mpd_read_time (const char *value, int *sec, int *optional_msec)
 static void
 mpd_update_playback_state (void)
 {
-	struct str_map *map = &g_ctx.playback_info;
-	g_ctx.song_elapsed = g_ctx.song_duration = g_ctx.volume = g_ctx.song = -1;
-	g_ctx.playlist_version = 0;
+	struct str_map *map = &g.playback_info;
+	g.song_elapsed = g.song_duration = g.volume = g.song = -1;
+	g.playlist_version = 0;
 
 	const char *state;
-	g_ctx.state = PLAYER_PLAYING;
+	g.state = PLAYER_PLAYING;
 	if ((state = str_map_find (map, "state")))
 	{
-		if (!strcmp (state, "stop"))
-			g_ctx.state = PLAYER_STOPPED;
-		if (!strcmp (state, "pause"))
-			g_ctx.state = PLAYER_PAUSED;
+		if (!strcmp (state, "stop"))   g.state = PLAYER_STOPPED;
+		if (!strcmp (state, "pause"))  g.state = PLAYER_PAUSED;
 	}
 
 	// Values in "time" are always rounded.  "elapsed", introduced in MPD 0.16,
@@ -2555,24 +2548,24 @@ mpd_update_playback_state (void)
 	}
 
 	int msec_past_second = 0;
-	mpd_read_time (elapsed,  &g_ctx.song_elapsed,  &msec_past_second);
-	mpd_read_time (duration, &g_ctx.song_duration, NULL);
+	mpd_read_time (elapsed,  &g.song_elapsed,  &msec_past_second);
+	mpd_read_time (duration, &g.song_duration, NULL);
 	strv_free (&fields);
 
 	// We could also just poll the server each half a second but let's not
-	poller_timer_reset (&g_ctx.elapsed_event);
-	if (g_ctx.state == PLAYER_PLAYING)
+	poller_timer_reset (&g.elapsed_event);
+	if (g.state == PLAYER_PLAYING)
 	{
-		poller_timer_set (&g_ctx.elapsed_event, 1000 - msec_past_second);
-		g_ctx.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
+		poller_timer_set (&g.elapsed_event, 1000 - msec_past_second);
+		g.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
 	}
 
 	// The server sends -1 when nothing is being played right now
 	unsigned long n;
-	if (xstrtoul_map (map, "volume",   &n))  g_ctx.volume           = n;
+	if (xstrtoul_map (map, "volume",   &n))  g.volume           = n;
 
-	if (xstrtoul_map (map, "playlist", &n))  g_ctx.playlist_version = n;
-	if (xstrtoul_map (map, "song",     &n))  g_ctx.song             = n;
+	if (xstrtoul_map (map, "playlist", &n))  g.playlist_version = n;
+	if (xstrtoul_map (map, "song",     &n))  g.song             = n;
 
 	app_invalidate ();
 }
@@ -2595,10 +2588,10 @@ mpd_process_info (const struct strv *data)
 			continue;
 		if (!strcasecmp_ascii (key, "playlistlength")
 			&& xstrtoul (&n, value, 10))
-			item_list_resize (&g_ctx.playlist, n);
+			item_list_resize (&g.playlist, n);
 		str_map_set (&map, key, xstrdup (value));
 	}
-	g_ctx.playback_info = map;
+	g.playback_info = map;
 
 	// It's much better to process the playlist from the back
 	str_map_init (&map);
@@ -2611,7 +2604,7 @@ mpd_process_info (const struct strv *data)
 		if (!strcasecmp_ascii (key, "file"))
 		{
 			if (xstrtoul_map (&map, "pos", &n))
-				item_list_set (&g_ctx.playlist, n, &map);
+				item_list_set (&g.playlist, n, &map);
 			str_map_clear (&map);
 		}
 	}
@@ -2625,7 +2618,7 @@ mpd_on_info_response (const struct mpd_response *response,
 	(void) user_data;
 
 	// TODO: preset an error player state?
-	str_map_free (&g_ctx.playback_info);
+	str_map_free (&g.playback_info);
 	if (!response->success)
 		print_debug ("%s: %s",
 			"retrieving MPD info failed", response->message_text);
@@ -2643,13 +2636,13 @@ static void
 mpd_on_tick (void *user_data)
 {
 	(void) user_data;
-	int64_t diff_msec = clock_msec (CLOCK_BEST) - g_ctx.elapsed_since;
+	int64_t diff_msec = clock_msec (CLOCK_BEST) - g.elapsed_since;
 	int elapsed_sec = diff_msec / 1000;
 	int elapsed_msec = diff_msec % 1000;
 
-	g_ctx.song_elapsed += elapsed_sec;
-	g_ctx.elapsed_since += elapsed_sec * 1000;
-	poller_timer_set (&g_ctx.elapsed_event, 1000 - elapsed_msec);
+	g.song_elapsed += elapsed_sec;
+	g.elapsed_since += elapsed_sec * 1000;
+	poller_timer_set (&g.elapsed_event, 1000 - elapsed_msec);
 
 	app_invalidate ();
 }
@@ -2657,11 +2650,11 @@ mpd_on_tick (void *user_data)
 static void
 mpd_request_info (void)
 {
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 
 	mpd_client_list_ok_begin (c);
 	mpd_client_send_command (c, "status", NULL);
-	char *last_version = xstrdup_printf ("%" PRIu32, g_ctx.playlist_version);
+	char *last_version = xstrdup_printf ("%" PRIu32, g.playlist_version);
 	mpd_client_send_command (c, "plchanges", last_version, NULL);
 	free (last_version);
 	mpd_client_list_end (c);
@@ -2673,7 +2666,7 @@ static void
 mpd_on_events (unsigned subsystems, void *user_data)
 {
 	(void) user_data;
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 
 	if (subsystems & MPD_SUBSYSTEM_DATABASE)
 		library_tab_reload (NULL);
@@ -2690,7 +2683,7 @@ mpd_on_events (unsigned subsystems, void *user_data)
 static void
 mpd_queue_reconnect (void)
 {
-	poller_timer_set (&g_ctx.connect_event, 5 * 1000);
+	poller_timer_set (&g.connect_event, 5 * 1000);
 }
 
 static void
@@ -2699,7 +2692,7 @@ mpd_on_password_response (const struct mpd_response *response,
 {
 	(void) data;
 	(void) user_data;
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 
 	if (response->success)
 	{
@@ -2718,10 +2711,10 @@ static void
 mpd_on_connected (void *user_data)
 {
 	(void) user_data;
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 
 	const char *password =
-		get_config_string (g_ctx.config.root, "settings.password");
+		get_config_string (g.config.root, "settings.password");
 	if (password)
 	{
 		mpd_client_send_command (c, "password", password, NULL);
@@ -2742,8 +2735,8 @@ mpd_on_failure (void *user_data)
 	print_debug ("connection to MPD failed");
 	mpd_queue_reconnect ();
 
-	item_list_resize (&g_ctx.playlist, 0);
-	str_map_free (&g_ctx.playback_info);
+	item_list_resize (&g.playlist, 0);
+	str_map_free (&g.playback_info);
 	mpd_update_playback_state ();
 
 	current_tab_update ();
@@ -2775,7 +2768,7 @@ app_on_reconnect (void *user_data)
 {
 	(void) user_data;
 
-	struct mpd_client *c = &g_ctx.client;
+	struct mpd_client *c = &g.client;
 	c->on_failure   = mpd_on_failure;
 	c->on_connected = mpd_on_connected;
 	c->on_event     = mpd_on_events;
@@ -2784,7 +2777,7 @@ app_on_reconnect (void *user_data)
 		c->on_io_hook = mpd_on_io_hook;
 
 	// We accept hostname/IPv4/IPv6 in pseudo-URL format, as well as sockets
-	char *address = xstrdup (get_config_string (g_ctx.config.root,
+	char *address = xstrdup (get_config_string (g.config.root,
 		"settings.address")), *p = address, *host = address, *port = "6600";
 
 	// Unwrap IPv6 addresses in format_host_port_pair() format
@@ -2887,13 +2880,13 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 	if (fd->revents & ~(POLLIN | POLLHUP | POLLERR))
 		print_debug ("fd %d: unexpected revents: %d", fd->fd, fd->revents);
 
-	poller_timer_reset (&g_ctx.tk_timer);
-	termo_advisereadable (g_ctx.tk);
+	poller_timer_reset (&g.tk_timer);
+	termo_advisereadable (g.tk);
 
 	termo_key_t event;
 	int64_t event_ts = clock_msec (CLOCK_BEST);
 	termo_result_t res;
-	while ((res = termo_getkey (g_ctx.tk, &event)) == TERMO_RES_KEY)
+	while ((res = termo_getkey (g.tk, &event)) == TERMO_RES_KEY)
 	{
 		// Simple double click detection via release--press delay, only a bit
 		// complicated by the fact that we don't know what's being released
@@ -2903,10 +2896,10 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 
 		int y, x, button, y_last, x_last;
 		termo_mouse_event_t type, type_last;
-		if (termo_interpret_mouse (g_ctx.tk, &event, &type, &button, &y, &x))
+		if (termo_interpret_mouse (g.tk, &event, &type, &button, &y, &x))
 		{
 			bool double_click = termo_interpret_mouse
-				(g_ctx.tk, &last_event, &type_last, NULL, &y_last, &x_last)
+				(g.tk, &last_event, &type_last, NULL, &y_last, &x_last)
 				&& event_ts - last_event_ts < 500
 				&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
 				&& y_last == y && x_last == x && last_button == button;
@@ -2927,7 +2920,7 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 	}
 
 	if (res == TERMO_RES_AGAIN)
-		poller_timer_set (&g_ctx.tk_timer, termo_get_waittime (g_ctx.tk));
+		poller_timer_set (&g.tk_timer, termo_get_waittime (g.tk));
 	else if (res == TERMO_RES_ERROR || res == TERMO_RES_EOF)
 		app_quit ();
 }
@@ -2938,7 +2931,7 @@ app_on_key_timer (void *user_data)
 	(void) user_data;
 
 	termo_key_t event;
-	if (termo_getkey_force (g_ctx.tk, &event) == TERMO_RES_KEY)
+	if (termo_getkey_force (g.tk, &event) == TERMO_RES_KEY)
 		if (!app_process_termo_event (&event))
 			app_quit ();
 }
@@ -2951,7 +2944,7 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 	char id = 0;
 	(void) read (fd->fd, &id, 1);
 
-	if (g_termination_requested && !g_ctx.quitting)
+	if (g_termination_requested && !g.quitting)
 		app_quit ();
 
 	if (g_winch_received)
@@ -2988,7 +2981,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	else if (g_debug_tab.active)
 	{
 		debug_tab_push (message.str,
-			user_data == NULL ? 0 : g_ctx.attrs[(intptr_t) user_data].attrs);
+			user_data == NULL ? 0 : g.attrs[(intptr_t) user_data].attrs);
 	}
 	else
 	{
@@ -3004,26 +2997,26 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 static void
 app_init_poller_events (void)
 {
-	poller_fd_init (&g_ctx.signal_event, &g_ctx.poller, g_signal_pipe[0]);
-	g_ctx.signal_event.dispatcher = app_on_signal_pipe_readable;
-	poller_fd_set (&g_ctx.signal_event, POLLIN);
+	poller_fd_init (&g.signal_event, &g.poller, g_signal_pipe[0]);
+	g.signal_event.dispatcher = app_on_signal_pipe_readable;
+	poller_fd_set (&g.signal_event, POLLIN);
 
-	poller_fd_init (&g_ctx.tty_event, &g_ctx.poller, STDIN_FILENO);
-	g_ctx.tty_event.dispatcher = app_on_tty_readable;
-	poller_fd_set (&g_ctx.tty_event, POLLIN);
+	poller_fd_init (&g.tty_event, &g.poller, STDIN_FILENO);
+	g.tty_event.dispatcher = app_on_tty_readable;
+	poller_fd_set (&g.tty_event, POLLIN);
 
-	poller_timer_init (&g_ctx.tk_timer, &g_ctx.poller);
-	g_ctx.tk_timer.dispatcher = app_on_key_timer;
+	poller_timer_init (&g.tk_timer, &g.poller);
+	g.tk_timer.dispatcher = app_on_key_timer;
 
-	poller_timer_init (&g_ctx.connect_event, &g_ctx.poller);
-	g_ctx.connect_event.dispatcher = app_on_reconnect;
-	poller_timer_set (&g_ctx.connect_event, 0);
+	poller_timer_init (&g.connect_event, &g.poller);
+	g.connect_event.dispatcher = app_on_reconnect;
+	poller_timer_set (&g.connect_event, 0);
 
-	poller_timer_init (&g_ctx.elapsed_event, &g_ctx.poller);
-	g_ctx.elapsed_event.dispatcher = mpd_on_tick;
+	poller_timer_init (&g.elapsed_event, &g.poller);
+	g.elapsed_event.dispatcher = mpd_on_tick;
 
-	poller_idle_init (&g_ctx.refresh_event, &g_ctx.poller);
-	g_ctx.refresh_event.dispatcher = app_on_refresh;
+	poller_idle_init (&g.refresh_event, &g.poller);
+	g.refresh_event.dispatcher = app_on_refresh;
 }
 
 int
@@ -3087,15 +3080,15 @@ main (int argc, char *argv[])
 	g_log_message_real = app_log_handler;
 
 	app_prepend_tab (info_tab_init ());
-	if (g_ctx.streams.len)
+	if (g.streams.len)
 		app_prepend_tab (streams_tab_init ());
 	app_prepend_tab (library_tab_init ());
 	app_prepend_tab (current_tab_init ());
-	app_switch_tab ((g_ctx.help_tab = help_tab_init ()));
+	app_switch_tab ((g.help_tab = help_tab_init ()));
 
-	g_ctx.polling = true;
-	while (g_ctx.polling)
-		poller_run (&g_ctx.poller);
+	g.polling = true;
+	while (g.polling)
+		poller_run (&g.poller);
 
 	endwin ();
 	g_log_message_real = log_message_stdio;
