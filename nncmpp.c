@@ -1971,9 +1971,16 @@ static void
 library_tab_on_data (const struct mpd_response *response,
 	const struct strv *data, void *user_data)
 {
-	(void) user_data;
+	char *data_path = user_data;
 	if (!response->success)
+	{
+		free (data_path);
 		return;
+	}
+
+	str_reset (&g_library_tab.path);
+	str_append (&g_library_tab.path, data_path);
+	free (data_path);
 
 	strv_reset (&g_library_tab.items);
 
@@ -2017,17 +2024,13 @@ library_tab_on_data (const struct mpd_response *response,
 static void
 library_tab_reload (const char *new_path)
 {
-	// TODO: actually we should update the path _after_ we receive data
-	struct str *path = &g_library_tab.path;
-	if (new_path)
-	{
-		str_reset (path);
-		str_append (path, new_path);
-	}
+	char *path = new_path
+		? xstrdup (new_path)
+		: xstrdup (g_library_tab.path.str);
 
 	struct mpd_client *c = &g.client;
-	mpd_client_send_command (c, "lsinfo", path->len ? path->str : "/", NULL);
-	mpd_client_add_task (c, library_tab_on_data, NULL);
+	mpd_client_send_command (c, "lsinfo", *path ? path : "/", NULL);
+	mpd_client_add_task (c, library_tab_on_data, path);
 	mpd_client_idle (c, 0);
 }
 
