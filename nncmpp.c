@@ -2956,11 +2956,10 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 
 	if (g_winch_received)
 	{
+		g_winch_received = false;
 		update_curses_terminal_size ();
 		app_fix_view_range ();
 		app_invalidate ();
-
-		g_winch_received = false;
 	}
 }
 
