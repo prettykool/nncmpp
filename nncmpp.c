@@ -645,7 +645,7 @@ tab_init (struct tab *self, const char *name)
 	// Assuming tab names are pure ASCII, otherwise this would be inaccurate
 	// and we'd need to filter it first to replace invalid chars with '?'
 	self->name_width = u8_strwidth ((uint8_t *) self->name, locale_charset ());
-	self->item_selected = -1;
+	self->item_selected = 0;
 }
 
 static void
@@ -1316,7 +1316,7 @@ static void
 app_ensure_selection_visible (void)
 {
 	struct tab *tab = g.active_tab;
-	if (tab->item_selected < 0)
+	if (tab->item_selected < 0 || !tab->item_count)
 		return;
 
 	int too_high = tab->item_top - tab->item_selected;
@@ -1334,8 +1334,8 @@ app_move_selection (int diff)
 {
 	struct tab *tab = g.active_tab;
 	int fixed = tab->item_selected += diff;
-	fixed = MAX (fixed, 0);
 	fixed = MIN (fixed, (int) tab->item_count - 1);
+	fixed = MAX (fixed, 0);
 
 	bool result = tab->item_selected != fixed;
 	tab->item_selected = fixed;
@@ -1556,7 +1556,8 @@ app_process_action (enum action action)
 	case ACTION_GOTO_BOTTOM:
 		if (tab->item_count)
 		{
-			g.active_tab->item_selected = (int) g.active_tab->item_count - 1;
+			g.active_tab->item_selected =
+				MAX (0, (int) g.active_tab->item_count - 1);
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
@@ -1814,7 +1815,7 @@ static bool
 current_tab_on_action (enum action action)
 {
 	struct tab *self = g.active_tab;
-	if (self->item_selected < 0)
+	if (self->item_selected < 0 || !self->item_count)
 		return false;
 
 	switch (action)
@@ -2034,7 +2035,7 @@ static bool
 library_tab_on_action (enum action action)
 {
 	struct tab *self = g.active_tab;
-	if (self->item_selected < 0)
+	if (self->item_selected < 0 || !self->item_count)
 		return false;
 
 	struct mpd_client *c = &g.client;
@@ -2309,7 +2310,7 @@ static bool
 streams_tab_on_action (enum action action)
 {
 	struct tab *self = g.active_tab;
-	if (self->item_selected < 0)
+	if (self->item_selected < 0 || !self->item_count)
 		return false;
 
 	// For simplicity the URL is the string following the stream name
