@@ -1400,6 +1400,7 @@ app_goto_tab (int tab_index)
 	\
 	XX( CHOOSE,             "Choose item"             ) \
 	XX( DELETE,             "Delete item"             ) \
+	XX( UP,                 "Go up a level"           ) \
 	\
 	XX( SCROLL_UP,          "Scroll up"               ) \
 	XX( SCROLL_DOWN,        "Scroll down"             ) \
@@ -1713,6 +1714,7 @@ g_default_bindings[] =
 	// Not sure how to set these up, they're pretty arbitrary so far
 	{ "Enter",      ACTION_CHOOSE,             {}},
 	{ "Delete",     ACTION_DELETE,             {}},
+	{ "Backspace",  ACTION_UP,                 {}},
 	{ "a",          ACTION_MPD_ADD,            {}},
 	{ "r",          ACTION_MPD_REPLACE,        {}},
 
@@ -2048,6 +2050,24 @@ library_tab_on_action (enum action action)
 		default:           hard_assert (!"invalid item type");
 		}
 		return true;
+	case ACTION_UP:
+	{
+		// TODO: probably put this in a special function
+		char *path = g_library_tab.path.str;
+		if (!*path)
+			return false;
+
+		char *last_slash;
+		if ((last_slash = strrchr (path, '/')))
+		{
+			char *up = xstrndup (path, last_slash - path);
+			library_tab_reload (up);
+			free (up);
+		}
+		else
+			library_tab_reload ("");
+		return true;
+	}
 	case ACTION_MPD_REPLACE:
 		// FIXME: we also need to play it if we've been playing things already
 		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
