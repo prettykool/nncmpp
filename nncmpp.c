@@ -1953,6 +1953,19 @@ library_tab_compare (char **a, char **b)
 	return app_casecmp ((uint8_t *) xa.path, (uint8_t *) xb.path);
 }
 
+static char *
+library_tab_above (void)
+{
+	struct str *path = &g_library_tab.path;
+	if (!path->len)
+		return NULL;
+
+	char *last_slash;
+	if ((last_slash = strrchr (path->str, '/')))
+		return xstrndup (path->str, last_slash - path->str);
+	return xstrdup ("");
+}
+
 static void
 library_tab_on_data (const struct mpd_response *response,
 	const struct strv *data, void *user_data)
@@ -1963,20 +1976,12 @@ library_tab_on_data (const struct mpd_response *response,
 
 	strv_reset (&g_library_tab.items);
 
-	struct str *path = &g_library_tab.path;
-	if (path->len)
+	char *above = library_tab_above ();
+	if (above)
 	{
 		library_tab_add (LIBRARY_ROOT, "", "");
-
-		char *last_slash;
-		if ((last_slash = strrchr (path->str, '/')))
-		{
-			char *up = xstrndup (path->str, last_slash - path->str);
-			library_tab_add (LIBRARY_UP, "", up);
-			free (up);
-		}
-		else
-			library_tab_add (LIBRARY_UP, "", "");
+		library_tab_add (LIBRARY_UP, "", above);
+		free (above);
 	}
 
 	struct str_map map;
@@ -2052,21 +2057,13 @@ library_tab_on_action (enum action action)
 		return true;
 	case ACTION_UP:
 	{
-		// TODO: probably put this in a special function
-		char *path = g_library_tab.path.str;
-		if (!*path)
-			return false;
-
-		char *last_slash;
-		if ((last_slash = strrchr (path, '/')))
+		char *above = library_tab_above ();
+		if (above)
 		{
-			char *up = xstrndup (path, last_slash - path);
-			library_tab_reload (up);
-			free (up);
+			library_tab_reload (above);
+			free (above);
 		}
-		else
-			library_tab_reload ("");
-		return true;
+		return above != NULL;
 	}
 	case ACTION_MPD_REPLACE:
 		// FIXME: we also need to play it if we've been playing things already
