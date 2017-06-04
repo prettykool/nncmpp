@@ -1143,7 +1143,7 @@ static int
 app_fitting_items (void)
 {
 	// The raw number of items that would have fit on the terminal
-	return LINES - g.header_height;
+	return LINES - g.header_height - 1 /* status bar */;
 }
 
 static int
@@ -1265,6 +1265,61 @@ app_draw_view (void)
 }
 
 static void
+app_write_mpd_status (struct row_buffer *buf)
+{
+	struct str_map *map = &g.playback_info;
+
+	// TODO: "N hours N minutes" ("stats" -> "playtime" or count in code)
+	char *stats;
+	if (g.playlist.len == 1)
+		stats = xstrdup_printf ("%zu song",  g.playlist.len);
+	else
+		stats = xstrdup_printf ("%zu songs", g.playlist.len);
+	row_buffer_append (buf, stats, APP_ATTR (NORMAL));
+	free (stats);
+
+	struct row_buffer right;
+	row_buffer_init (&right);
+
+	const char *s;
+	bool repeat  = (s = str_map_find (map, "repeat"))  && strcmp (s, "0");
+	bool random  = (s = str_map_find (map, "random"))  && strcmp (s, "0");
+	bool single  = (s = str_map_find (map, "single"))  && strcmp (s, "0");
+	bool consume = (s = str_map_find (map, "consume")) && strcmp (s, "0");
+
+	chtype a[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
+	row_buffer_append_args (&right,
+		" ", APP_ATTR (NORMAL), "repeat",  a[repeat],  NULL);
+	row_buffer_append_args (&right,
+		" ", APP_ATTR (NORMAL), "random",  a[random],  NULL);
+	row_buffer_append_args (&right,
+		" ", APP_ATTR (NORMAL), "single",  a[single],  NULL);
+	row_buffer_append_args (&right,
+		" ", APP_ATTR (NORMAL), "consume", a[consume], NULL);
+
+	row_buffer_space (buf,
+		MAX (0, COLS - buf->total_width - right.total_width),
+		APP_ATTR (NORMAL));
+	row_buffer_append_buffer (buf, &right);
+	row_buffer_free (&right);
+}
+
+static void
+app_draw_statusbar (void)
+{
+	struct row_buffer buf;
+	row_buffer_init (&buf);
+
+	// TODO: display all errors in here with some timeout
+	// TODO: task status such as "Updating database..."
+	if (g.client.state == MPD_CONNECTED)
+		app_write_mpd_status (&buf);
+
+	move (LINES - 1, 0);
+	app_flush_buffer (&buf, COLS, APP_ATTR (NORMAL));
+}
+
+static void
 app_on_refresh (void *user_data)
 {
 	(void) user_data;
@@ -1272,6 +1327,7 @@ app_on_refresh (void *user_data)
 
 	app_draw_header ();
 	app_draw_view ();
+	app_draw_statusbar ();
 
 	refresh ();
 }
@@ -2751,7 +2807,7 @@ mpd_on_events (unsigned subsystems, void *user_data)
 	if (subsystems & MPD_SUBSYSTEM_DATABASE)
 		library_tab_reload (NULL);
 
-	if (subsystems & (MPD_SUBSYSTEM_PLAYER
+	if (subsystems & (MPD_SUBSYSTEM_PLAYER | MPD_SUBSYSTEM_OPTIONS
 		| MPD_SUBSYSTEM_PLAYLIST | MPD_SUBSYSTEM_MIXER))
 		mpd_request_info ();
 	else
@@ -3054,7 +3110,8 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 
 	// If the standard error output isn't redirected, try our best at showing
 	// the message to the user; it will probably get overdrawn soon
-	// TODO: remember it somewhere so that it stays shown for a while
+	// TODO: remember it somewhere so that it stays shown for a while,
+	//   probably in the status bar, see hex.c
 	if (!isatty (STDERR_FILENO))
 		fprintf (stderr, "%s\n", message.str);
 	else if (g_debug_tab.active)
