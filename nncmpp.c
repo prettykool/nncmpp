@@ -1773,12 +1773,7 @@ app_process_termo_event (termo_key_t *event)
 
 // --- Current tab -------------------------------------------------------------
 
-// TODO: remove the useless wrapper struct?
-static struct
-{
-	struct tab super;                   ///< Parent class
-}
-g_current_tab;
+static struct tab g_current_tab;
 
 static void
 current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
@@ -1841,7 +1836,7 @@ current_tab_on_action (enum action action)
 static void
 current_tab_update (void)
 {
-	g_current_tab.super.item_count = g.playlist.len;
+	g_current_tab.item_count = g.playlist.len;
 	app_fix_view_range ();
 	app_invalidate ();
 }
@@ -1849,7 +1844,7 @@ current_tab_update (void)
 static struct tab *
 current_tab_init (void)
 {
-	struct tab *super = &g_current_tab.super;
+	struct tab *super = &g_current_tab;
 	tab_init (super, "Current");
 	super->on_action = current_tab_on_action;
 	super->on_item_draw = current_tab_on_item_draw;
