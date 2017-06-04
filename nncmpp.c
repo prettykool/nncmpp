@@ -33,6 +33,7 @@
 	/* Listview                                      */ \
 	XX( EVEN,       "even",       -1, -1, 0           ) \
 	XX( ODD,        "odd",        -1, -1, 0           ) \
+	XX( DIRECTORY,  "directory",  -1, -1, 0           ) \
 	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
 	XX( SCROLLBAR,  "scrollbar",  -1, -1, 0           ) \
 	/* These are for debugging only                  */ \
@@ -1919,7 +1920,8 @@ library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	case LIBRARY_FILE: prefix = " "; name = x.name; break;
 	default:           hard_assert (!"invalid item type");
 	}
-	row_buffer_append_args (buffer, prefix, 0, name, 0, NULL);
+	chtype attrs = x.type != LIBRARY_FILE ? APP_ATTR (DIRECTORY) : 0;
+	row_buffer_append_args (buffer, prefix, attrs, name, attrs, NULL);
 }
 
 static char
