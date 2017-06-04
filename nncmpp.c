@@ -1275,7 +1275,9 @@ app_write_mpd_status (struct row_buffer *buf)
 
 	// TODO: "N hours N minutes" ("stats" -> "playtime" or count in code)
 	char *stats;
-	if (g.playlist.len == 1)
+	if (str_map_find (map, "updating_db"))
+		stats = xstrdup ("Updating database...");
+	else if (g.playlist.len == 1)
 		stats = xstrdup_printf ("%zu song",  g.playlist.len);
 	else
 		stats = xstrdup_printf ("%zu songs", g.playlist.len);
@@ -1314,7 +1316,6 @@ app_draw_statusbar (void)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
-	// TODO: task status such as "Updating database..."
 	if (g.message)
 		row_buffer_append (&buf, g.message, APP_ATTR (HIGHLIGHT));
 	else if (g.client.state == MPD_CONNECTED)
@@ -1459,6 +1460,7 @@ app_goto_tab (int tab_index)
 	\
 	XX( MPD_ADD,         "Add song to playlist"       ) \
 	XX( MPD_REPLACE,     "Replace playlist with song" ) \
+	XX( MPD_UPDATE_DB,   "Update MPD database"        ) \
 	\
 	XX( CHOOSE,             "Choose item"             ) \
 	XX( DELETE,             "Delete item"             ) \
@@ -1567,6 +1569,12 @@ app_process_action (enum action action)
 		break;
 	case ACTION_HELP_TAB:
 		app_switch_tab (g.help_tab);
+		break;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	case ACTION_MPD_UPDATE_DB:
+		MPD_SIMPLE ("update");
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1791,6 +1799,7 @@ g_default_bindings[] =
 	{ "Backspace",  ACTION_UP,                 {}},
 	{ "a",          ACTION_MPD_ADD,            {}},
 	{ "r",          ACTION_MPD_REPLACE,        {}},
+	{ "u",          ACTION_MPD_UPDATE_DB,      {}},
 
 	{ "Left",       ACTION_MPD_PREVIOUS,       {}},
 	{ "Right",      ACTION_MPD_NEXT,           {}},
@@ -2827,7 +2836,7 @@ mpd_on_events (unsigned subsystems, void *user_data)
 		library_tab_reload (NULL);
 
 	if (subsystems & (MPD_SUBSYSTEM_PLAYER | MPD_SUBSYSTEM_OPTIONS
-		| MPD_SUBSYSTEM_PLAYLIST | MPD_SUBSYSTEM_MIXER))
+		| MPD_SUBSYSTEM_PLAYLIST | MPD_SUBSYSTEM_MIXER | MPD_SUBSYSTEM_UPDATE))
 		mpd_request_info ();
 	else
 		mpd_client_idle (c, 0);
