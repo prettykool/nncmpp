@@ -580,6 +580,9 @@ static struct app_context
 	struct poller_fd tty_event;         ///< Terminal input event
 	struct poller_fd signal_event;      ///< Signal FD event
 
+	struct poller_timer message_timer;  ///< Message timeout
+	char *message;                      ///< Message to show in the statusbar
+
 	// Connection:
 
 	struct mpd_client client;           ///< MPD client interface
@@ -870,6 +873,7 @@ app_free_context (void)
 
 	config_free (&g.config);
 	poller_free (&g.poller);
+	free (g.message);
 
 	if (g.tk)
 		termo_destroy (g.tk);
@@ -1310,9 +1314,10 @@ app_draw_statusbar (void)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
-	// TODO: display all errors in here with some timeout
 	// TODO: task status such as "Updating database..."
-	if (g.client.state == MPD_CONNECTED)
+	if (g.message)
+		row_buffer_append (&buf, g.message, APP_ATTR (HIGHLIGHT));
+	else if (g.client.state == MPD_CONNECTED)
 		app_write_mpd_status (&buf);
 
 	move (LINES - 1, 0);
@@ -1508,6 +1513,17 @@ mpd_client_vsend_command (struct mpd_client *self, va_list ap)
 static bool mpd_client_send_simple (struct mpd_client *self, ...)
 	ATTRIBUTE_SENTINEL;
 
+static void
+mpd_on_simple_response (const struct mpd_response *response,
+	const struct strv *data, void *user_data)
+{
+	(void) data;
+	(void) user_data;
+
+	if (!response->success)
+		print_error ("%s: %s", "command failed", response->message_text);
+}
+
 static bool
 mpd_client_send_simple (struct mpd_client *self, ...)
 {
@@ -1519,7 +1535,7 @@ mpd_client_send_simple (struct mpd_client *self, ...)
 	mpd_client_vsend_command (self, ap);
 	va_end (ap);
 
-	mpd_client_add_task (self, NULL, NULL);
+	mpd_client_add_task (self, mpd_on_simple_response, NULL);
 	mpd_client_idle (self, 0);
 	return true;
 }
@@ -2083,9 +2099,7 @@ library_tab_on_data (const struct mpd_response *response,
 	char *new_path = user_data;
 	if (!response->success)
 	{
-		// TODO: we should print that out visibly
-		print_error ("changing the directory to '%s' failed: %s",
-			new_path, response->message_text);
+		print_error ("cannot read directory: %s", response->message_text);
 		free (new_path);
 		return;
 	}
@@ -2301,7 +2315,7 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	if (msg->data.result
 	 && msg->data.result != CURLE_WRITE_ERROR)
 	{
-		print_error ("%s: %s", "download failed", self->curl.curl_error);
+		print_error ("%s", self->curl.curl_error);
 		return;
 	}
 
@@ -2325,7 +2339,7 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	// cURL is not willing to parse the ICY header, the code is zero then
 	if (code && code != 200)
 	{
-		print_error ("%s: %ld", "unexpected HTTP response code", code);
+		print_error ("%s: %ld", "unexpected HTTP response", code);
 		return;
 	}
 
@@ -2427,19 +2441,25 @@ streams_tab_on_action (enum action action)
 	// For simplicity the URL is the string following the stream name
 	const char *uri = 1 + strchr (g.streams.vector[self->item_selected], 0);
 
-	// TODO: show any error to the user
+	struct error *e = NULL;
 	switch (action)
 	{
 	case ACTION_MPD_REPLACE:
-		streams_tab_process (uri, true,  NULL);
-		return true;
+		streams_tab_process (uri, true,  &e);
+		break;
 	case ACTION_CHOOSE:
 	case ACTION_MPD_ADD:
-		streams_tab_process (uri, false, NULL);
-		return true;
+		streams_tab_process (uri, false, &e);
+		break;
 	default:
 		return false;
 	}
+	if (e)
+	{
+		print_error ("%s", e->message);
+		error_free (e);
+	}
+	return true;
 }
 
 static void
@@ -2755,9 +2775,8 @@ mpd_on_info_response (const struct mpd_response *response,
 	// TODO: preset an error player state?
 	str_map_clear (&g.playback_info);
 	if (!response->success)
-		// TODO: we should print that out visibly (permission errors)
-		print_debug ("%s: %s",
-			"retrieving MPD info failed", response->message_text);
+		print_error ("%s: %s",
+			"MPD status retrieval failed", response->message_text);
 	else if (!data->len)
 		print_debug ("empty MPD status response");
 	else
@@ -2838,7 +2857,7 @@ mpd_on_password_response (const struct mpd_response *response,
 	else
 	{
 		print_error ("%s: %s",
-			"couldn't authenticate to MPD", response->message_text);
+			"MPD authentication failed", response->message_text);
 		mpd_client_send_command (c, "close", NULL);
 	}
 }
@@ -3093,6 +3112,16 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 }
 
 static void
+app_on_message_timer (void *user_data)
+{
+	(void) user_data;
+
+	free (g.message);
+	g.message = NULL;
+	app_invalidate ();
+}
+
+static void
 app_log_handler (void *user_data, const char *quote, const char *fmt,
 	va_list ap)
 {
@@ -3109,21 +3138,18 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	str_append_vprintf (&message, fmt, ap);
 
 	// If the standard error output isn't redirected, try our best at showing
-	// the message to the user; it will probably get overdrawn soon
-	// TODO: remember it somewhere so that it stays shown for a while,
-	//   probably in the status bar, see hex.c
+	// the message to the user
 	if (!isatty (STDERR_FILENO))
 		fprintf (stderr, "%s\n", message.str);
 	else if (g_debug_tab.active)
-	{
 		debug_tab_push (message.str,
 			user_data == NULL ? 0 : g.attrs[(intptr_t) user_data].attrs);
-	}
 	else
 	{
-		// TODO: remember the position and restore it
-		move (LINES - 1, 0);
-		app_write_line (message.str, A_REVERSE);
+		free (g.message);
+		g.message = xstrdup (message.str);
+		app_invalidate ();
+		poller_timer_set (&g.message_timer, 5000);
 	}
 	str_free (&message);
 
@@ -3140,6 +3166,9 @@ app_init_poller_events (void)
 	poller_fd_init (&g.tty_event, &g.poller, STDIN_FILENO);
 	g.tty_event.dispatcher = app_on_tty_readable;
 	poller_fd_set (&g.tty_event, POLLIN);
+
+	poller_timer_init (&g.message_timer, &g.poller);
+	g.message_timer.dispatcher = app_on_message_timer;
 
 	poller_timer_init (&g.tk_timer, &g.poller);
 	g.tk_timer.dispatcher = app_on_key_timer;
