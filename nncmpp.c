@@ -1307,14 +1307,15 @@ app_write_mpd_status (struct row_buffer *buf)
 	bool single  = (s = str_map_find (map, "single"))  && strcmp (s, "0");
 	bool consume = (s = str_map_find (map, "consume")) && strcmp (s, "0");
 
+	// TODO: remove the conditionals once we make them clickable
 	chtype a[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
-	row_buffer_append_args (&right,
+	if (repeat)  row_buffer_append_args (&right,
 		" ", APP_ATTR (NORMAL), "repeat",  a[repeat],  NULL);
-	row_buffer_append_args (&right,
+	if (random)  row_buffer_append_args (&right,
 		" ", APP_ATTR (NORMAL), "random",  a[random],  NULL);
-	row_buffer_append_args (&right,
+	if (single)  row_buffer_append_args (&right,
 		" ", APP_ATTR (NORMAL), "single",  a[single],  NULL);
-	row_buffer_append_args (&right,
+	if (consume) row_buffer_append_args (&right,
 		" ", APP_ATTR (NORMAL), "consume", a[consume], NULL);
 
 	row_buffer_space (buf,
