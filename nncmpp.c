@@ -31,6 +31,7 @@
 	XX( TAB_BAR,    "tab_bar",    -1, -1, A_REVERSE   ) \
 	XX( TAB_ACTIVE, "tab_active", -1, -1, A_UNDERLINE ) \
 	/* Listview                                      */ \
+	XX( HEADER,     "header",     -1, -1, A_UNDERLINE ) \
 	XX( EVEN,       "even",       -1, -1, 0           ) \
 	XX( ODD,        "odd",        -1, -1, 0           ) \
 	XX( DIRECTORY,  "directory",  -1, -1, 0           ) \
@@ -544,6 +545,8 @@ struct tab
 	char *name;                         ///< Visible identifier
 	size_t name_width;                  ///< Visible width of the name
 
+	char *header;                       ///< The header, should there be any
+
 	// Implementation:
 
 	// TODO: free() callback?
@@ -617,6 +620,7 @@ static struct app_context
 
 	int header_height;                  ///< Height of the header
 
+	int tabs_offset;                    ///< Offset to tabs or -1
 	int controls_offset;                ///< Offset to player controls or -1
 	int gauge_offset;                   ///< Offset to the gauge or -1
 	int gauge_width;                    ///< Width of the gauge, if present
@@ -1111,6 +1115,7 @@ app_draw_header (void)
 	// TODO: call app_fix_view_range() if it changes from the previous value
 	g.header_height = 0;
 
+	g.tabs_offset = -1;
 	g.controls_offset = -1;
 	g.gauge_offset = -1;
 	g.gauge_width = 0;
@@ -1138,9 +1143,18 @@ app_draw_header (void)
 	row_buffer_append (&buf, APP_TITLE, attrs[g.active_tab == g.help_tab]);
 	row_buffer_append (&buf, " ", attrs[false]);
 
+	g.tabs_offset = g.header_height;
 	LIST_FOR_EACH (struct tab, iter, g.tabs)
 		row_buffer_append (&buf, iter->name, attrs[iter == g.active_tab]);
 	app_flush_header (&buf, attrs[false]);
+
+	const char *header = g.active_tab->header;
+	if (header)
+	{
+		row_buffer_init (&buf);
+		row_buffer_append (&buf, header, APP_ATTR (HEADER));
+		app_flush_header (&buf, APP_ATTR (HEADER));
+	}
 }
 
 static int
@@ -1652,12 +1666,12 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll (-app_fitting_items ());
-		app_move_selection (-app_fitting_items ());
+		app_scroll (-app_visible_items ());
+		app_move_selection (-app_visible_items ());
 		break;
 	case ACTION_GOTO_PAGE_NEXT:
-		app_scroll (app_fitting_items ());
-		app_move_selection (app_fitting_items ());
+		app_scroll (app_visible_items ());
+		app_move_selection (app_visible_items ());
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1701,7 +1715,7 @@ app_process_left_mouse_click (int line, int column, bool double_click)
 			free (where);
 		}
 	}
-	else if (line == g.header_height - 1)
+	else if (line == g.tabs_offset)
 	{
 		struct tab *winner = NULL;
 		int indent = strlen (APP_TITLE);
@@ -1720,7 +1734,7 @@ app_process_left_mouse_click (int line, int column, bool double_click)
 
 		app_switch_tab (winner);
 	}
-	else
+	else if (line >= g.header_height)
 	{
 		struct tab *tab = g.active_tab;
 		int row_index = line - g.header_height;
@@ -2099,6 +2113,12 @@ library_tab_change_level (const char *new_path)
 
 	str_reset (path);
 	str_append (path, new_path);
+
+	free (g_library_tab.super.header);
+	g_library_tab.super.header = NULL;
+
+	if (path->len)
+		g_library_tab.super.header = xstrdup_printf ("/%s", path->str);
 }
 
 static void
