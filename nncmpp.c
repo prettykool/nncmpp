@@ -1858,11 +1858,21 @@ current_tab_init (void)
 
 // --- Library tab -------------------------------------------------------------
 
+struct library_level
+{
+	LIST_HEADER (struct library_level)
+
+	int item_top;                       ///< Stored state
+	int item_selected;                  ///< Stored state
+	char path[];                        ///< Path of the level
+};
+
 static struct
 {
 	struct tab super;                   ///< Parent class
 	struct str path;                    ///< Current path
 	struct strv items;                  ///< Current items (type, name, path)
+	struct library_level *above;        ///< Upper levels
 }
 g_library_tab;
 
@@ -1957,7 +1967,7 @@ library_tab_compare (char **a, char **b)
 }
 
 static char *
-library_tab_above (void)
+library_tab_parent (void)
 {
 	struct str *path = &g_library_tab.path;
 	if (!path->len)
@@ -1969,29 +1979,76 @@ library_tab_above (void)
 	return xstrdup ("");
 }
 
+static bool
+library_tab_is_above (const char *above, const char *path)
+{
+	size_t above_len = strlen (above);
+	if (strncmp (above, path, above_len))
+		return false;
+	// The root is an empty string and is above anything other than itself
+	return path[above_len] == '/' || (*path && !*above);
+}
+
+static void
+library_tab_change_level (const char *new_path)
+{
+	struct str *path = &g_library_tab.path;
+	if (!strcmp (path->str, new_path))
+		return;
+
+	struct library_level *above;
+	if (library_tab_is_above (path->str, new_path))
+	{
+		above = xcalloc (1, sizeof *above + path->len + 1);
+		above->item_top = g_library_tab.super.item_top;
+		above->item_selected = g_library_tab.super.item_selected;
+		memcpy (above->path, path->str, path->len);
+		LIST_PREPEND (g_library_tab.above, above);
+
+		// Select the ".." entry to reflect Norton Commander
+		g_library_tab.super.item_top = 0;
+		g_library_tab.super.item_selected = 1;
+	}
+	else while ((above = g_library_tab.above)
+		&& !library_tab_is_above (above->path, new_path))
+	{
+		if (!strcmp (above->path, new_path))
+		{
+			g_library_tab.super.item_top = above->item_top;
+			g_library_tab.super.item_selected = above->item_selected;
+		}
+		g_library_tab.above = above->next;
+		free (above);
+	}
+
+	str_reset (path);
+	str_append (path, new_path);
+}
+
 static void
 library_tab_on_data (const struct mpd_response *response,
 	const struct strv *data, void *user_data)
 {
-	char *data_path = user_data;
+	char *new_path = user_data;
 	if (!response->success)
 	{
-		free (data_path);
+		// TODO: we should print that out visibly
+		print_error ("changing the directory to '%s' failed: %s",
+			new_path, response->message_text);
+		free (new_path);
 		return;
 	}
 
-	str_reset (&g_library_tab.path);
-	str_append (&g_library_tab.path, data_path);
-	free (data_path);
-
 	strv_reset (&g_library_tab.items);
+	library_tab_change_level (new_path);
+	free (new_path);
 
-	char *above = library_tab_above ();
-	if (above)
+	char *parent = library_tab_parent ();
+	if (parent)
 	{
 		library_tab_add (LIBRARY_ROOT, "", "");
-		library_tab_add (LIBRARY_UP, "", above);
-		free (above);
+		library_tab_add (LIBRARY_UP, "", parent);
+		free (parent);
 	}
 
 	struct str_map map;
@@ -2014,9 +2071,7 @@ library_tab_on_data (const struct mpd_response *response,
 	struct strv *items = &g_library_tab.items;
 	qsort (items->vector, items->len, sizeof *items->vector,
 		(int (*) (const void *, const void *)) library_tab_compare);
-
-	// TODO: we ought to remember the previous level's selection and item_top
-	g_library_tab.super.item_count = g_library_tab.items.len;
+	g_library_tab.super.item_count = items->len;
 
 	app_fix_view_range ();
 	app_move_selection (0);
@@ -2063,13 +2118,13 @@ library_tab_on_action (enum action action)
 		return true;
 	case ACTION_UP:
 	{
-		char *above = library_tab_above ();
-		if (above)
+		char *parent = library_tab_parent ();
+		if (parent)
 		{
-			library_tab_reload (above);
-			free (above);
+			library_tab_reload (parent);
+			free (parent);
 		}
-		return above != NULL;
+		return parent != NULL;
 	}
 	case ACTION_MPD_REPLACE:
 		// FIXME: we also need to play it if we've been playing things already
