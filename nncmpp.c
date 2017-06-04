@@ -1489,7 +1489,11 @@ app_goto_tab (int tab_index)
 	XX( GOTO_ITEM_PREVIOUS, "Go to the previous item" ) \
 	XX( GOTO_ITEM_NEXT,     "Go to the next item"     ) \
 	XX( GOTO_PAGE_PREVIOUS, "Go to the previous page" ) \
-	XX( GOTO_PAGE_NEXT,     "Go to the next page"     )
+	XX( GOTO_PAGE_NEXT,     "Go to the next page"     ) \
+	\
+	XX( GOTO_VIEW_TOP,      "Select the top item"     ) \
+	XX( GOTO_VIEW_CENTER,   "Select the center item"  ) \
+	XX( GOTO_VIEW_BOTTOM,   "Select the bottom item"  )
 
 enum action
 {
@@ -1675,6 +1679,19 @@ app_process_action (enum action action)
 		app_move_selection (app_visible_items ());
 		break;
 
+	case ACTION_GOTO_VIEW_TOP:
+		g.active_tab->item_selected = g.active_tab->item_top;
+		app_move_selection (0);
+		break;
+	case ACTION_GOTO_VIEW_CENTER:
+		g.active_tab->item_selected = g.active_tab->item_top;
+		app_move_selection (MAX (0, app_visible_items () / 2 - 1));
+		break;
+	case ACTION_GOTO_VIEW_BOTTOM:
+		g.active_tab->item_selected = g.active_tab->item_top;
+		app_move_selection (MAX (0, app_visible_items () - 1));
+		break;
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	case ACTION_NONE:
@@ -1807,6 +1824,10 @@ g_default_bindings[] =
 	{ "C-n",        ACTION_GOTO_ITEM_NEXT,     {}},
 	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS, {}},
 	{ "C-f",        ACTION_GOTO_PAGE_NEXT,     {}},
+
+	{ "H",          ACTION_GOTO_VIEW_TOP,      {}},
+	{ "M",          ACTION_GOTO_VIEW_CENTER,   {}},
+	{ "L",          ACTION_GOTO_VIEW_BOTTOM,   {}},
 
 	// Not sure how to set these up, they're pretty arbitrary so far
 	{ "Enter",      ACTION_CHOOSE,             {}},
