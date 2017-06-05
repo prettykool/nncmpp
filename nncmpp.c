@@ -1516,6 +1516,8 @@ app_goto_tab (int tab_index)
 	\
 	XX( SCROLL_UP,          "Scroll up"               ) \
 	XX( SCROLL_DOWN,        "Scroll down"             ) \
+	XX( MOVE_UP,            "Move selection up"       ) \
+	XX( MOVE_DOWN,          "Move selection down"     ) \
 	\
 	XX( GOTO_TOP,           "Go to the top"           ) \
 	XX( GOTO_BOTTOM,        "Go to the bottom"        ) \
@@ -1817,6 +1819,8 @@ g_default_bindings[] =
 	{ "End",        ACTION_GOTO_BOTTOM,        {}},
 	{ "M-<",        ACTION_GOTO_TOP,           {}},
 	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
+	{ "S-Up",       ACTION_MOVE_UP,            {}},
+	{ "S-Down",     ACTION_MOVE_DOWN,          {}},
 	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS, {}},
 	{ "Down",       ACTION_GOTO_ITEM_NEXT,     {}},
 	{ "k",          ACTION_GOTO_ITEM_PREVIOUS, {}},
@@ -1930,6 +1934,27 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 }
 
 static bool
+current_tab_move_song (const char *id, int diff)
+{
+	struct mpd_client *c = &g.client;
+	int target = g_current_tab.item_selected + diff;
+	if (c->state != MPD_CONNECTED || target < 0)
+		return false;
+
+	char *target_str = xstrdup_printf ("%d", target);
+	mpd_client_send_command (c, "moveid", id, target_str, NULL);
+	free (target_str);
+	mpd_client_add_task (c, mpd_on_simple_response, NULL);
+	mpd_client_idle (c, 0);
+
+	// XXX: this behaves a bit erratically, as even if we waited for
+	//   a confirmation from the daemon, it would precede the playlist update
+	g_current_tab.item_selected = target;
+	app_move_selection (0);
+	return true;
+}
+
+static bool
 current_tab_on_action (enum action action)
 {
 	struct tab *self = g.active_tab;
@@ -1939,10 +1964,10 @@ current_tab_on_action (enum action action)
 	if (!map || !(id = compact_map_find (map, "id")))
 		return false;
 
-	// TODO: add actions to move the current selection up or down with Shift,
-	//   with multiple items we need to use all number indexes, but "moveid"
 	switch (action)
 	{
+	case ACTION_MOVE_UP:   return current_tab_move_song (id, -1);
+	case ACTION_MOVE_DOWN: return current_tab_move_song (id,  1);
 	case ACTION_CHOOSE:    return MPD_SIMPLE ("playid",   id);
 	case ACTION_DELETE:    return MPD_SIMPLE ("deleteid", id);
 	default:
