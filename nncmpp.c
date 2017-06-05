@@ -1609,33 +1609,32 @@ app_process_action (enum action action)
 	{
 	case ACTION_QUIT:
 		app_quit ();
-		break;
+		return true;
 	case ACTION_REDRAW:
 		clear ();
 		app_invalidate ();
-		break;
+		return true;
 	case ACTION_LAST_TAB:
 		if (!g.last_tab)
 			return false;
 		app_switch_tab (g.last_tab);
-		break;
+		return true;
 	case ACTION_HELP_TAB:
 		app_switch_tab (g.help_tab);
-		break;
+		return true;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	case ACTION_MPD_TOGGLE:
-		if      (g.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1");
-		else if (g.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0");
-		else                                MPD_SIMPLE ("play");
-		break;
-	case ACTION_MPD_STOP:      MPD_SIMPLE ("stop");           break;
-	case ACTION_MPD_PREVIOUS:  MPD_SIMPLE ("previous");       break;
-	case ACTION_MPD_NEXT:      MPD_SIMPLE ("next");           break;
-	case ACTION_MPD_FORWARD:   MPD_SIMPLE ("seekcur", "+10"); break;
-	case ACTION_MPD_BACKWARD:  MPD_SIMPLE ("seekcur", "-10"); break;
-	case ACTION_MPD_UPDATE_DB: MPD_SIMPLE ("update");         break;
+		if (g.state == PLAYER_PLAYING) return MPD_SIMPLE ("pause", "1");
+		if (g.state == PLAYER_PAUSED)  return MPD_SIMPLE ("pause", "0");
+		return MPD_SIMPLE ("play");
+	case ACTION_MPD_STOP:      return MPD_SIMPLE ("stop");
+	case ACTION_MPD_PREVIOUS:  return MPD_SIMPLE ("previous");
+	case ACTION_MPD_NEXT:      return MPD_SIMPLE ("next");
+	case ACTION_MPD_FORWARD:   return MPD_SIMPLE ("seekcur", "+10");
+	case ACTION_MPD_BACKWARD:  return MPD_SIMPLE ("seekcur", "-10");
+	case ACTION_MPD_UPDATE_DB: return MPD_SIMPLE ("update");
 	case ACTION_MPD_VOLUME_UP:
 		if (g.volume >= 0)
 		{
@@ -1643,7 +1642,7 @@ app_process_action (enum action action)
 			MPD_SIMPLE ("setvol", volume);
 			free (volume);
 		}
-		break;
+		return true;
 	case ACTION_MPD_VOLUME_DOWN:
 		if (g.volume >= 0)
 		{
@@ -1651,13 +1650,13 @@ app_process_action (enum action action)
 			MPD_SIMPLE ("setvol", volume);
 			free (volume);
 		}
-		break;
+		return true;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 		// XXX: these should rather be parametrized
-	case ACTION_SCROLL_UP:   app_scroll (-3); break;
-	case ACTION_SCROLL_DOWN: app_scroll  (3); break;
+	case ACTION_SCROLL_UP:   return app_scroll (-3);
+	case ACTION_SCROLL_DOWN: return app_scroll  (3);
 
 	case ACTION_GOTO_TOP:
 		if (tab->item_count)
@@ -1666,7 +1665,7 @@ app_process_action (enum action action)
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
-		break;
+		return true;
 	case ACTION_GOTO_BOTTOM:
 		if (tab->item_count)
 		{
@@ -1675,7 +1674,7 @@ app_process_action (enum action action)
 			app_ensure_selection_visible ();
 			app_invalidate ();
 		}
-		break;
+		return true;
 
 	case ACTION_GOTO_ITEM_PREVIOUS:
 		return app_move_selection (-1);
@@ -1702,7 +1701,7 @@ app_process_action (enum action action)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	case ACTION_NONE:
-		break;
+		return true;
 	default:
 		return false;
 	}
@@ -1944,8 +1943,8 @@ current_tab_on_action (enum action action)
 	//   with multiple items we need to use all number indexes, but "moveid"
 	switch (action)
 	{
-	case ACTION_CHOOSE: MPD_SIMPLE ("playid",   id); return true;
-	case ACTION_DELETE: MPD_SIMPLE ("deleteid", id); return true;
+	case ACTION_CHOOSE:    return MPD_SIMPLE ("playid",   id);
+	case ACTION_DELETE:    return MPD_SIMPLE ("deleteid", id);
 	default:
 		break;
 	}
@@ -2265,8 +2264,7 @@ library_tab_on_action (enum action action)
 		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
 			break;
 
-		MPD_SIMPLE ("add", x.path);
-		return true;
+		return MPD_SIMPLE ("add", x.path);
 	default:
 		break;
 	}
