@@ -149,6 +149,13 @@ latin1_to_utf8 (const char *latin1)
 	return str_steal (&converted);
 }
 
+static void
+cstr_uncapitalize (char *s)
+{
+	if (isupper (s[0]) && islower (s[1]))
+		s[0] = tolower_ascii (s[0]);
+}
+
 static int
 print_curl_debug (CURL *easy, curl_infotype type, char *data, size_t len,
 	void *ud)
@@ -2366,6 +2373,7 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	if (msg->data.result
 	 && msg->data.result != CURLE_WRITE_ERROR)
 	{
+		cstr_uncapitalize (self->curl.curl_error);
 		print_error ("%s", self->curl.curl_error);
 		return;
 	}
