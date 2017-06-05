@@ -1502,6 +1502,8 @@ app_goto_tab (int tab_index)
 	XX( MPD_TOGGLE,         "Toggle play/pause"       ) \
 	XX( MPD_STOP,           "Stop playback"           ) \
 	XX( MPD_NEXT,           "Next song"               ) \
+	XX( MPD_BACKWARD,       "Seek backwards"          ) \
+	XX( MPD_FORWARD,        "Seek forwards"           ) \
 	XX( MPD_VOLUME_UP,      "Increase volume"         ) \
 	XX( MPD_VOLUME_DOWN,    "Decrease volume"         ) \
 	\
@@ -1661,11 +1663,13 @@ app_process_action (enum action action)
 		}
 		break;
 
-	// TODO: relative seeks
-#if 0
-		FORWARD:  MPD_SIMPLE ("seekcur", "+10");
-		BACKWARD: MPD_SIMPLE ("seekcur", "-10");
-#endif
+		// XXX: these should rather be parametrized
+	case ACTION_MPD_FORWARD:
+		MPD_SIMPLE ("seekcur", "+10");
+		break;
+	case ACTION_MPD_BACKWARD:
+		MPD_SIMPLE ("seekcur", "-10");
+		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -1859,6 +1863,8 @@ g_default_bindings[] =
 	{ "r",          ACTION_MPD_REPLACE,        {}},
 	{ "u",          ACTION_MPD_UPDATE_DB,      {}},
 
+	{ "M-Left",     ACTION_MPD_BACKWARD,       {}},
+	{ "M-Right",    ACTION_MPD_FORWARD,        {}},
 	{ "Left",       ACTION_MPD_PREVIOUS,       {}},
 	{ "Right",      ACTION_MPD_NEXT,           {}},
 	{ "h",          ACTION_MPD_PREVIOUS,       {}},
