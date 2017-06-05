@@ -1498,18 +1498,18 @@ app_goto_tab (int tab_index)
 	XX( HELP_TAB,           "Switch to the help tab"  ) \
 	XX( LAST_TAB,           "Switch to previous tab"  ) \
 	\
-	XX( MPD_PREVIOUS,       "Previous song"           ) \
 	XX( MPD_TOGGLE,         "Toggle play/pause"       ) \
 	XX( MPD_STOP,           "Stop playback"           ) \
+	XX( MPD_PREVIOUS,       "Previous song"           ) \
 	XX( MPD_NEXT,           "Next song"               ) \
 	XX( MPD_BACKWARD,       "Seek backwards"          ) \
 	XX( MPD_FORWARD,        "Seek forwards"           ) \
+	XX( MPD_UPDATE_DB,      "Update MPD database"     ) \
 	XX( MPD_VOLUME_UP,      "Increase volume"         ) \
 	XX( MPD_VOLUME_DOWN,    "Decrease volume"         ) \
 	\
 	XX( MPD_ADD,         "Add song to playlist"       ) \
 	XX( MPD_REPLACE,     "Replace playlist with song" ) \
-	XX( MPD_UPDATE_DB,   "Update MPD database"        ) \
 	\
 	XX( CHOOSE,             "Choose item"             ) \
 	XX( DELETE,             "Delete item"             ) \
@@ -1626,26 +1626,17 @@ app_process_action (enum action action)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	case ACTION_MPD_UPDATE_DB:
-		MPD_SIMPLE ("update");
-		break;
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-	case ACTION_MPD_PREVIOUS:
-		MPD_SIMPLE ("previous");
-		break;
 	case ACTION_MPD_TOGGLE:
 		if      (g.state == PLAYER_PLAYING) MPD_SIMPLE ("pause", "1");
 		else if (g.state == PLAYER_PAUSED)  MPD_SIMPLE ("pause", "0");
 		else                                MPD_SIMPLE ("play");
 		break;
-	case ACTION_MPD_STOP:
-		MPD_SIMPLE ("stop");
-		break;
-	case ACTION_MPD_NEXT:
-		MPD_SIMPLE ("next");
-		break;
+	case ACTION_MPD_STOP:      MPD_SIMPLE ("stop");           break;
+	case ACTION_MPD_PREVIOUS:  MPD_SIMPLE ("previous");       break;
+	case ACTION_MPD_NEXT:      MPD_SIMPLE ("next");           break;
+	case ACTION_MPD_FORWARD:   MPD_SIMPLE ("seekcur", "+10"); break;
+	case ACTION_MPD_BACKWARD:  MPD_SIMPLE ("seekcur", "-10"); break;
+	case ACTION_MPD_UPDATE_DB: MPD_SIMPLE ("update");         break;
 	case ACTION_MPD_VOLUME_UP:
 		if (g.volume >= 0)
 		{
@@ -1663,23 +1654,11 @@ app_process_action (enum action action)
 		}
 		break;
 
-		// XXX: these should rather be parametrized
-	case ACTION_MPD_FORWARD:
-		MPD_SIMPLE ("seekcur", "+10");
-		break;
-	case ACTION_MPD_BACKWARD:
-		MPD_SIMPLE ("seekcur", "-10");
-		break;
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 		// XXX: these should rather be parametrized
-	case ACTION_SCROLL_UP:
-		app_scroll (-3);
-		break;
-	case ACTION_SCROLL_DOWN:
-		app_scroll (3);
-		break;
+	case ACTION_SCROLL_UP:   app_scroll (-3); break;
+	case ACTION_SCROLL_DOWN: app_scroll  (3); break;
 
 	case ACTION_GOTO_TOP:
 		if (tab->item_count)
@@ -1861,16 +1840,16 @@ g_default_bindings[] =
 	{ "Backspace",  ACTION_UP,                 {}},
 	{ "a",          ACTION_MPD_ADD,            {}},
 	{ "r",          ACTION_MPD_REPLACE,        {}},
-	{ "u",          ACTION_MPD_UPDATE_DB,      {}},
 
-	{ "M-Left",     ACTION_MPD_BACKWARD,       {}},
-	{ "M-Right",    ACTION_MPD_FORWARD,        {}},
 	{ "Left",       ACTION_MPD_PREVIOUS,       {}},
 	{ "Right",      ACTION_MPD_NEXT,           {}},
+	{ "M-Left",     ACTION_MPD_BACKWARD,       {}},
+	{ "M-Right",    ACTION_MPD_FORWARD,        {}},
 	{ "h",          ACTION_MPD_PREVIOUS,       {}},
 	{ "l",          ACTION_MPD_NEXT,           {}},
 	{ "Space",      ACTION_MPD_TOGGLE,         {}},
 	{ "C-Space",    ACTION_MPD_STOP,           {}},
+	{ "u",          ACTION_MPD_UPDATE_DB,      {}},
 	{ "M-PageUp",   ACTION_MPD_VOLUME_UP,      {}},
 	{ "M-PageDown", ACTION_MPD_VOLUME_DOWN,    {}},
 };
