@@ -2247,12 +2247,20 @@ library_tab_on_action (enum action action)
 		return parent != NULL;
 	}
 	case ACTION_MPD_REPLACE:
-		// FIXME: we also need to play it if we've been playing things already
 		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
 			break;
 
-		MPD_SIMPLE ("clear");
-		MPD_SIMPLE ("add", x.path);
+		// Clears the playlist (which stops playback), add what user wanted
+		// to replace it with, and eventually restore playback;
+		// I can't think of a reliable alternative that omits the "play"
+		mpd_client_list_begin (c);
+		mpd_client_send_command (c, "clear", NULL);
+		mpd_client_send_command (c, "add", x.path, NULL);
+		if (g.state == PLAYER_PLAYING)
+			mpd_client_send_command (c, "play", NULL);
+		mpd_client_list_end (c);
+		mpd_client_add_task (c, mpd_on_simple_response, NULL);
+		mpd_client_idle (c, 0);
 		return true;
 	case ACTION_MPD_ADD:
 		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
@@ -2400,8 +2408,6 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	}
 
 	mpd_client_list_begin (c);
-
-	// FIXME: we also need to play it if we've been playing things already
 	if (self->replace)
 		mpd_client_send_command (c, "clear", NULL);
 
@@ -2412,10 +2418,12 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 		strv_append (&links, uri);
 	for (size_t i = 0; i < links.len; i++)
 		mpd_client_send_command (c, "add", links.vector[i], NULL);
+	if (self->replace && g.state == PLAYER_PLAYING)
+		mpd_client_send_command (c, "play", NULL);
 
 	strv_free (&links);
 	mpd_client_list_end (c);
-	mpd_client_add_task (c, NULL, NULL);
+	mpd_client_add_task (c, mpd_on_simple_response, NULL);
 	mpd_client_idle (c, 0);
 }
 
