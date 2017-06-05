@@ -1120,7 +1120,6 @@ app_draw_status (void)
 static void
 app_draw_header (void)
 {
-	// TODO: call app_fix_view_range() if it changes from the previous value
 	g.header_height = 0;
 
 	g.tabs_offset = -1;
@@ -1372,22 +1371,9 @@ app_draw_statusbar (void)
 	app_flush_buffer (&buf, COLS, APP_ATTR (NORMAL));
 }
 
-static void
-app_on_refresh (void *user_data)
-{
-	(void) user_data;
-	poller_idle_reset (&g.refresh_event);
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	app_draw_header ();
-	app_draw_view ();
-	app_draw_statusbar ();
-
-	refresh ();
-}
-
-// --- Actions -----------------------------------------------------------------
-
-/// Checks what items are visible and returns if fixes were needed
+/// Checks what items are visible and returns if the range was alright
 static bool
 app_fix_view_range (void)
 {
@@ -1395,7 +1381,6 @@ app_fix_view_range (void)
 	if (tab->item_top < 0)
 	{
 		tab->item_top = 0;
-		app_invalidate ();
 		return false;
 	}
 
@@ -1407,11 +1392,26 @@ app_fix_view_range (void)
 	if (tab->item_top > max_item_top)
 	{
 		tab->item_top = max_item_top;
-		app_invalidate ();
 		return false;
 	}
 	return true;
 }
+
+static void
+app_on_refresh (void *user_data)
+{
+	(void) user_data;
+	poller_idle_reset (&g.refresh_event);
+
+	app_draw_header ();
+	app_fix_view_range();
+	app_draw_view ();
+	app_draw_statusbar ();
+
+	refresh ();
+}
+
+// --- Actions -----------------------------------------------------------------
 
 /// Scroll down (positive) or up (negative) @a n items
 static bool
@@ -1443,11 +1443,11 @@ static bool
 app_move_selection (int diff)
 {
 	struct tab *tab = g.active_tab;
-	int fixed = tab->item_selected += diff;
+	int fixed = tab->item_selected + diff;
 	fixed = MIN (fixed, (int) tab->item_count - 1);
 	fixed = MAX (fixed, 0);
 
-	bool result = tab->item_selected != fixed;
+	bool result = !diff || tab->item_selected != fixed;
 	tab->item_selected = fixed;
 	app_invalidate ();
 
@@ -1696,33 +1696,26 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_GOTO_ITEM_PREVIOUS:
-		app_move_selection (-1);
-		break;
+		return app_move_selection (-1);
 	case ACTION_GOTO_ITEM_NEXT:
-		app_move_selection (1);
-		break;
+		return app_move_selection (1);
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
 		app_scroll (-app_visible_items ());
-		app_move_selection (-app_visible_items ());
-		break;
+		return app_move_selection (-app_visible_items ());
 	case ACTION_GOTO_PAGE_NEXT:
 		app_scroll (app_visible_items ());
-		app_move_selection (app_visible_items ());
-		break;
+		return app_move_selection (app_visible_items ());
 
 	case ACTION_GOTO_VIEW_TOP:
 		g.active_tab->item_selected = g.active_tab->item_top;
-		app_move_selection (0);
-		break;
+		return app_move_selection (0);
 	case ACTION_GOTO_VIEW_CENTER:
 		g.active_tab->item_selected = g.active_tab->item_top;
-		app_move_selection (MAX (0, app_visible_items () / 2 - 1));
-		break;
+		return app_move_selection (MAX (0, app_visible_items () / 2 - 1));
 	case ACTION_GOTO_VIEW_BOTTOM:
 		g.active_tab->item_selected = g.active_tab->item_top;
-		app_move_selection (MAX (0, app_visible_items () - 1));
-		break;
+		return app_move_selection (MAX (0, app_visible_items () - 1));
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -1795,11 +1788,8 @@ app_process_left_mouse_click (int line, int column, bool double_click)
 		// TODO: handle the scrollbar a bit better than this
 		int visible_items = app_visible_items ();
 		if ((int) tab->item_count > visible_items && column == COLS - 1)
-		{
 			tab->item_top = (float) row_index / visible_items
 				* (int) tab->item_count - visible_items / 2;
-			app_fix_view_range ();
-		}
 		else
 			tab->item_selected = row_index + tab->item_top;
 		app_invalidate ();
@@ -1986,7 +1976,6 @@ static void
 current_tab_update (void)
 {
 	g_current_tab.item_count = g.playlist.len;
-	app_fix_view_range ();
 	app_invalidate ();
 }
 
@@ -2221,7 +2210,6 @@ library_tab_on_data (const struct mpd_response *response,
 		(int (*) (const void *, const void *)) library_tab_compare);
 	g_library_tab.super.item_count = items->len;
 
-	app_fix_view_range ();
 	app_move_selection (0);
 	app_invalidate ();
 }
@@ -3203,7 +3191,6 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 	{
 		g_winch_received = false;
 		update_curses_terminal_size ();
-		app_fix_view_range ();
 		app_invalidate ();
 	}
 }
