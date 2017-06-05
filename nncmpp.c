@@ -2675,8 +2675,7 @@ struct debug_item
 static struct
 {
 	struct tab super;                   ///< Parent class
-	struct debug_item *items;           ///< Items
-	size_t items_alloc;                 ///< How many items are allocated
+	ARRAY (struct debug_item, items)    ///< Items
 	bool active;                        ///< The tab is present
 }
 g_debug_tab;
@@ -2684,7 +2683,7 @@ g_debug_tab;
 static void
 debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 {
-	hard_assert (item_index <= g_debug_tab.super.item_count);
+	hard_assert (item_index < g_debug_tab.items_len);
 	struct debug_item *item = &g_debug_tab.items[item_index];
 
 	char buf[16];
@@ -2707,16 +2706,11 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 static void
 debug_tab_push (const char *message, chtype attrs)
 {
-	// TODO: uh... aren't we rather going to write our own abstraction?
-	if (g_debug_tab.items_alloc <= g_debug_tab.super.item_count)
-	{
-		g_debug_tab.items = xreallocarray (g_debug_tab.items,
-			sizeof *g_debug_tab.items, (g_debug_tab.items_alloc <<= 1));
-	}
+	ARRAY_RESERVE (g_debug_tab.items, 1);
 
 	// TODO: there should be a better, more efficient mechanism for this
-	struct debug_item *item =
-		&g_debug_tab.items[g_debug_tab.super.item_count++];
+	struct debug_item *item = &g_debug_tab.items[g_debug_tab.items_len++];
+	g_debug_tab.super.item_count = g_debug_tab.items_len;
 	item->text = xstrdup (message);
 	item->attrs = attrs;
 	item->timestamp = clock_msec (CLOCK_REALTIME);
@@ -2727,8 +2721,7 @@ debug_tab_push (const char *message, chtype attrs)
 static struct tab *
 debug_tab_init (void)
 {
-	g_debug_tab.items = xcalloc
-		((g_debug_tab.items_alloc = 16), sizeof *g_debug_tab.items);
+	ARRAY_INIT (g_debug_tab.items);
 	g_debug_tab.active = true;
 
 	struct tab *super = &g_debug_tab.super;
