@@ -896,8 +896,8 @@ app_quit (void)
 {
 	g.quitting = true;
 
-	// TODO: bring down the MPD interface (if that's needed at all);
-	//   so far there's nothing for us to wait on, so let's just stop looping
+	// So far there's nothing for us to wait on, so let's just stop looping;
+	// otherwise we might want to e.g. cleanly bring down the MPD interface
 	g.polling = false;
 }
 
