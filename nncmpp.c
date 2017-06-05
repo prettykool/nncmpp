@@ -2463,9 +2463,9 @@ streams_tab_process (const char *uri, bool replace, struct error **e)
 	 || (res = curl_easy_setopt (easy, CURLOPT_URL,            uri))
 
 	 || (res = curl_easy_setopt (easy, CURLOPT_VERBOSE, (long) g_debug_mode))
-	 || (res = curl_easy_setopt (easy, CURLOPT_DEBUGFUNCTION,  print_curl_debug))
-	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEDATA,      &task.data))
-	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEFUNCTION,  write_callback)))
+	 || (res = curl_easy_setopt (easy, CURLOPT_DEBUGFUNCTION, print_curl_debug))
+	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEDATA, &task.data))
+	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEFUNCTION, write_callback)))
 	{
 		error_set (e, "%s: %s", "cURL setup failed", curl_easy_strerror (res));
 		goto error;
@@ -2973,7 +2973,6 @@ static void
 mpd_on_io_hook (void *user_data, bool outgoing, const char *line)
 {
 	(void) user_data;
-
 	if (outgoing)
 		debug_tab_push (xstrdup_printf ("<< %s", line), APP_ATTR (OUTGOING));
 	else
@@ -3091,6 +3090,40 @@ signals_setup_handlers (void)
 // --- Initialisation, event handling ------------------------------------------
 
 static void
+app_on_tty_event (termo_key_t *event, int64_t event_ts)
+{
+	// Simple double click detection via release--press delay, only a bit
+	// complicated by the fact that we don't know what's being released
+	static termo_key_t last_event;
+	static int64_t last_event_ts;
+	static int last_button;
+
+	int y, x, button, y_last, x_last;
+	termo_mouse_event_t type, type_last;
+	if (termo_interpret_mouse (g.tk, event, &type, &button, &y, &x))
+	{
+		bool double_click = termo_interpret_mouse
+			(g.tk, &last_event, &type_last, NULL, &y_last, &x_last)
+			&& event_ts - last_event_ts < 500
+			&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
+			&& y_last == y && x_last == x && last_button == button;
+		if (!app_process_mouse (type, y, x, button, double_click))
+			beep ();
+
+		// Prevent interpreting triple clicks as two double clicks
+		if (double_click)
+			last_button = 0;
+		else if (type == TERMO_MOUSE_PRESS)
+			last_button = button;
+	}
+	else if (!app_process_termo_event (event))
+		beep ();
+
+	last_event = *event;
+	last_event_ts = event_ts;
+}
+
+static void
 app_on_tty_readable (const struct pollfd *fd, void *user_data)
 {
 	(void) user_data;
@@ -3104,37 +3137,7 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 	int64_t event_ts = clock_msec (CLOCK_BEST);
 	termo_result_t res;
 	while ((res = termo_getkey (g.tk, &event)) == TERMO_RES_KEY)
-	{
-		// Simple double click detection via release--press delay, only a bit
-		// complicated by the fact that we don't know what's being released
-		static termo_key_t last_event;
-		static int64_t last_event_ts;
-		static int last_button;
-
-		int y, x, button, y_last, x_last;
-		termo_mouse_event_t type, type_last;
-		if (termo_interpret_mouse (g.tk, &event, &type, &button, &y, &x))
-		{
-			bool double_click = termo_interpret_mouse
-				(g.tk, &last_event, &type_last, NULL, &y_last, &x_last)
-				&& event_ts - last_event_ts < 500
-				&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
-				&& y_last == y && x_last == x && last_button == button;
-			if (!app_process_mouse (type, y, x, button, double_click))
-				beep ();
-
-			// Prevent interpreting triple clicks as two double clicks
-			if (double_click)
-				last_button = 0;
-			else if (type == TERMO_MOUSE_PRESS)
-				last_button = button;
-		}
-		else if (!app_process_termo_event (&event))
-			beep ();
-
-		last_event = event;
-		last_event_ts = event_ts;
-	}
+		app_on_tty_event (&event, event_ts);
 
 	if (res == TERMO_RES_AGAIN)
 		poller_timer_set (&g.tk_timer, termo_get_waittime (g.tk));
