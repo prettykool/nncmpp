@@ -2680,14 +2680,12 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 }
 
 static void
-debug_tab_push (const char *message, chtype attrs)
+debug_tab_push (char *message, chtype attrs)
 {
 	ARRAY_RESERVE (g_debug_tab.items, 1);
-
-	// TODO: there should be a better, more efficient mechanism for this
 	struct debug_item *item = &g_debug_tab.items[g_debug_tab.items_len++];
 	g_debug_tab.super.item_count = g_debug_tab.items_len;
-	item->text = xstrdup (message);
+	item->text = message;
 	item->attrs = attrs;
 	item->timestamp = clock_msec (CLOCK_REALTIME);
 
@@ -2976,19 +2974,10 @@ mpd_on_io_hook (void *user_data, bool outgoing, const char *line)
 {
 	(void) user_data;
 
-	struct str s;
-	str_init (&s);
 	if (outgoing)
-	{
-		str_append_printf (&s, "<< %s", line);
-		debug_tab_push (s.str, APP_ATTR (OUTGOING));
-	}
+		debug_tab_push (xstrdup_printf ("<< %s", line), APP_ATTR (OUTGOING));
 	else
-	{
-		str_append_printf (&s, ">> %s", line);
-		debug_tab_push (s.str, APP_ATTR (INCOMING));
-	}
-	str_free (&s);
+		debug_tab_push (xstrdup_printf (">> %s", line), APP_ATTR (INCOMING));
 }
 
 static void
@@ -3214,7 +3203,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	if (!isatty (STDERR_FILENO))
 		fprintf (stderr, "%s\n", message.str);
 	else if (g_debug_tab.active)
-		debug_tab_push (message.str,
+		debug_tab_push (str_steal (&message),
 			user_data == NULL ? 0 : g.attrs[(intptr_t) user_data].attrs);
 	else
 	{
