@@ -492,7 +492,7 @@ static compact_map_t
 item_list_get (struct item_list *self, int i)
 {
 	if (i < 0 || (size_t) i >= self->len || !self->items[i])
-		return false;
+		return NULL;
 	return self->items[i];
 }
 
@@ -1935,22 +1935,18 @@ static bool
 current_tab_on_action (enum action action)
 {
 	struct tab *self = g.active_tab;
-	if (self->item_selected < 0 || !self->item_count)
+	compact_map_t map = item_list_get (&g.playlist, self->item_selected);
+
+	const char *id;
+	if (!map || !(id = compact_map_find (map, "id")))
 		return false;
 
+	// TODO: add actions to move the current selection up or down with Shift,
+	//   with multiple items we need to use all number indexes, but "moveid"
 	switch (action)
 	{
-		char *song;
-	case ACTION_CHOOSE:
-		song = xstrdup_printf ("%d", self->item_selected);
-		MPD_SIMPLE ("play", song);
-		free (song);
-		return true;
-	case ACTION_DELETE:
-		song = xstrdup_printf ("%d", self->item_selected);
-		MPD_SIMPLE ("delete", song);
-		free (song);
-		return true;
+	case ACTION_CHOOSE: MPD_SIMPLE ("playid",   id); return true;
+	case ACTION_DELETE: MPD_SIMPLE ("deleteid", id); return true;
 	default:
 		break;
 	}
