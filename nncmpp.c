@@ -2210,7 +2210,10 @@ library_tab_on_data (const struct mpd_response *response,
 		(int (*) (const void *, const void *)) library_tab_compare);
 	g_library_tab.super.item_count = items->len;
 
-	app_move_selection (0);
+	// Don't force the selection visible when there's no need to touch it
+	if (g_library_tab.super.item_selected >= (int) items->len)
+		app_move_selection (0);
+
 	app_invalidate ();
 }
 
