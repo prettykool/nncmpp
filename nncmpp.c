@@ -612,6 +612,7 @@ static struct app_context
 
 	struct item_list playlist;          ///< Current playlist
 	uint32_t playlist_version;          ///< Playlist version
+	int playlist_time;                  ///< Play time in seconds
 
 	// Data:
 
@@ -1290,20 +1291,44 @@ app_draw_view (void)
 }
 
 static void
+app_write_mpd_status_playlist (struct row_buffer *buf)
+{
+	struct str stats;
+	str_init (&stats);
+
+	if (g.playlist.len == 1)
+		str_append_printf (&stats, "1 song ");
+	else
+		str_append_printf (&stats, "%zu songs ", g.playlist.len);
+
+	int hours   = g.playlist_time / 3600;
+	int minutes = g.playlist_time % 3600 / 60;
+	if (hours || minutes)
+	{
+		str_append_c (&stats, ' ');
+
+		if (hours == 1)
+			str_append_printf (&stats, " 1 hour");
+		else if (hours)
+			str_append_printf (&stats, " %d hours", hours);
+
+		if (minutes == 1)
+			str_append_printf (&stats, " 1 minute");
+		else if (minutes)
+			str_append_printf (&stats, " %d minutes", minutes);
+	}
+	row_buffer_append (buf, stats.str, APP_ATTR (NORMAL));
+	str_free (&stats);
+}
+
+static void
 app_write_mpd_status (struct row_buffer *buf)
 {
 	struct str_map *map = &g.playback_info;
-
-	// TODO: "N hours N minutes" ("stats" -> "playtime" or count in code)
-	char *stats;
 	if (str_map_find (map, "updating_db"))
-		stats = xstrdup ("Updating database...");
-	else if (g.playlist.len == 1)
-		stats = xstrdup_printf ("%zu song",  g.playlist.len);
+		row_buffer_append (buf, "Updating database...", APP_ATTR (NORMAL));
 	else
-		stats = xstrdup_printf ("%zu songs", g.playlist.len);
-	row_buffer_append (buf, stats, APP_ATTR (NORMAL));
-	free (stats);
+		app_write_mpd_status_playlist (buf);
 
 	struct row_buffer right;
 	row_buffer_init (&right);
@@ -2734,10 +2759,27 @@ mpd_read_time (const char *value, int *sec, int *optional_msec)
 }
 
 static void
+mpd_update_playlist_time (void)
+{
+	g.playlist_time = 0;
+
+	// It would also be possible to retrieve this from "stats" -> "playtime"
+	unsigned long n;
+	for (size_t i = 0; i < g.playlist.len; i++)
+	{
+		compact_map_t map = item_list_get (&g.playlist, i);
+		const char *time = compact_map_find (map, "time");
+		if (time && xstrtoul (&n, time, 10))
+			g.playlist_time += n;
+	}
+}
+
+static void
 mpd_update_playback_state (void)
 {
 	struct str_map *map = &g.playback_info;
 	g.song_elapsed = g.song_duration = g.volume = g.song = -1;
+	uint32_t last_playlist_version = g.playlist_version;
 	g.playlist_version = 0;
 
 	const char *state;
@@ -2783,6 +2825,9 @@ mpd_update_playback_state (void)
 
 	if (xstrtoul_map (map, "playlist", &n))  g.playlist_version = n;
 	if (xstrtoul_map (map, "song",     &n))  g.song             = n;
+
+	if (g.playlist_version != last_playlist_version)
+		mpd_update_playlist_time ();
 
 	app_invalidate ();
 }
@@ -2949,10 +2994,10 @@ mpd_on_failure (void *user_data)
 	print_debug ("connection to MPD failed");
 	mpd_queue_reconnect ();
 
-	item_list_resize (&g.playlist, 0);
 	str_map_clear (&g.playback_info);
-	mpd_update_playback_state ();
+	item_list_resize (&g.playlist, 0);
 
+	mpd_update_playback_state ();
 	current_tab_update ();
 	info_tab_update ();
 }
