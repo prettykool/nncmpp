@@ -556,7 +556,6 @@ struct tab
 
 	// Implementation:
 
-	// TODO: free() callback?
 	tab_action_fn on_action;            ///< User action handler callback
 	tab_item_draw_fn on_item_draw;      ///< Item draw callback
 
