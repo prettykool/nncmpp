@@ -1600,6 +1600,17 @@ mpd_client_send_simple (struct mpd_client *self, ...)
 	mpd_client_send_simple (&g.client, __VA_ARGS__, NULL)
 
 static bool
+app_setvol (int value)
+{
+	char *volume = xstrdup_printf ("%d", MAX (0, MIN (100, value)));
+	bool result = g.volume >= 0 && MPD_SIMPLE ("setvol", volume);
+	free (volume);
+	return result;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static bool
 app_process_action (enum action action)
 {
 	// First let the tab try to handle this
@@ -1609,6 +1620,8 @@ app_process_action (enum action action)
 
 	switch (action)
 	{
+	case ACTION_NONE:
+		return true;
 	case ACTION_QUIT:
 		app_quit ();
 		return true;
@@ -1616,6 +1629,9 @@ app_process_action (enum action action)
 		clear ();
 		app_invalidate ();
 		return true;
+	default:
+		return false;
+
 	case ACTION_LAST_TAB:
 		if (!g.last_tab)
 			return false;
@@ -1625,40 +1641,23 @@ app_process_action (enum action action)
 		app_switch_tab (g.help_tab);
 		return true;
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 	case ACTION_MPD_TOGGLE:
-		if (g.state == PLAYER_PLAYING) return MPD_SIMPLE ("pause", "1");
-		if (g.state == PLAYER_PAUSED)  return MPD_SIMPLE ("pause", "0");
+		if (g.state == PLAYER_PLAYING)  return MPD_SIMPLE ("pause", "1");
+		if (g.state == PLAYER_PAUSED)   return MPD_SIMPLE ("pause", "0");
 		return MPD_SIMPLE ("play");
-	case ACTION_MPD_STOP:      return MPD_SIMPLE ("stop");
-	case ACTION_MPD_PREVIOUS:  return MPD_SIMPLE ("previous");
-	case ACTION_MPD_NEXT:      return MPD_SIMPLE ("next");
-	case ACTION_MPD_FORWARD:   return MPD_SIMPLE ("seekcur", "+10");
-	case ACTION_MPD_BACKWARD:  return MPD_SIMPLE ("seekcur", "-10");
-	case ACTION_MPD_UPDATE_DB: return MPD_SIMPLE ("update");
-	case ACTION_MPD_VOLUME_UP:
-		if (g.volume >= 0)
-		{
-			char *volume = xstrdup_printf ("%d", MIN (100, g.volume + 10));
-			MPD_SIMPLE ("setvol", volume);
-			free (volume);
-		}
-		return true;
-	case ACTION_MPD_VOLUME_DOWN:
-		if (g.volume >= 0)
-		{
-			char *volume = xstrdup_printf ("%d", MAX (0,   g.volume - 10));
-			MPD_SIMPLE ("setvol", volume);
-			free (volume);
-		}
-		return true;
+	case ACTION_MPD_STOP:               return MPD_SIMPLE ("stop");
+	case ACTION_MPD_PREVIOUS:           return MPD_SIMPLE ("previous");
+	case ACTION_MPD_NEXT:               return MPD_SIMPLE ("next");
+	case ACTION_MPD_FORWARD:            return MPD_SIMPLE ("seekcur", "+10");
+	case ACTION_MPD_BACKWARD:           return MPD_SIMPLE ("seekcur", "-10");
+	case ACTION_MPD_UPDATE_DB:          return MPD_SIMPLE ("update");
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+	case ACTION_MPD_VOLUME_UP:          return app_setvol (g.volume + 10);
+	case ACTION_MPD_VOLUME_DOWN:        return app_setvol (g.volume - 10);
 
 		// XXX: these should rather be parametrized
-	case ACTION_SCROLL_UP:   return app_scroll (-3);
-	case ACTION_SCROLL_DOWN: return app_scroll  (3);
+	case ACTION_SCROLL_UP:              return app_scroll (-3);
+	case ACTION_SCROLL_DOWN:            return app_scroll  (3);
 
 	case ACTION_GOTO_TOP:
 		if (tab->item_count)
@@ -1678,10 +1677,8 @@ app_process_action (enum action action)
 		}
 		return true;
 
-	case ACTION_GOTO_ITEM_PREVIOUS:
-		return app_move_selection (-1);
-	case ACTION_GOTO_ITEM_NEXT:
-		return app_move_selection (1);
+	case ACTION_GOTO_ITEM_PREVIOUS:     return app_move_selection (-1);
+	case ACTION_GOTO_ITEM_NEXT:         return app_move_selection (1);
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
 		app_scroll (-app_visible_items ());
@@ -1699,15 +1696,8 @@ app_process_action (enum action action)
 	case ACTION_GOTO_VIEW_BOTTOM:
 		g.active_tab->item_selected = g.active_tab->item_top;
 		return app_move_selection (MAX (0, app_visible_items () - 1));
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-	case ACTION_NONE:
-		return true;
-	default:
-		return false;
 	}
-	return true;
+	return false;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
