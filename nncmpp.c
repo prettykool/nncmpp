@@ -2325,6 +2325,32 @@ is_content_type (const char *content_type,
 }
 
 static void
+streams_tab_filter (char *line, regex_t *re, struct strv *out)
+{
+	regmatch_t groups[2];
+	if (regexec (re, line, 2, groups, 0) == REG_NOMATCH)
+		return;
+
+	// It may happen that playlist files contain useless, invalid quotes,
+	// let's be liberal in what we accept
+	regoff_t start = groups[1].rm_so, end = groups[1].rm_eo;
+	while (end > start + 1 && line[start] == '"' && line[end - 1] == '"')
+	{
+		start++;
+		end--;
+	}
+
+	char *target = xstrndup (line + start, end - start);
+	if (utf8_validate (target, end - start))
+		strv_append_owned (out, target);
+	else
+	{
+		strv_append_owned (out, latin1_to_utf8 (target));
+		free (target);
+	}
+}
+
+static void
 streams_tab_parse_playlist (const char *playlist, const char *content_type,
 	struct strv *out)
 {
@@ -2338,28 +2364,15 @@ streams_tab_parse_playlist (const char *playlist, const char *content_type,
 		"(https?://([][a-z0-9._~:/?#@!$&'()*+,;=-]|%[a-f0-9]{2})+)";
 	if ((lines.len && !strcasecmp_ascii (lines.vector[0], "[playlist]"))
 	 || (content_type && is_content_type (content_type, "audio", "x-scpls")))
-		extract_re = "^File[^=]*=(.*)";
+		extract_re = "^File[^=]*=(.+)";
 	else if ((lines.len && !strcasecmp_ascii (lines.vector[0], "#EXTM3U"))
 	 || (content_type && is_content_type (content_type, "audio", "x-mpegurl")))
 		extract_re = "^([^#].*)";
 
 	regex_t *re = regex_compile (extract_re, REG_EXTENDED, NULL);
 	hard_assert (re != NULL);
-
-	regmatch_t groups[2];
 	for (size_t i = 0; i < lines.len; i++)
-		if (regexec (re, lines.vector[i], 2, groups, 0) != REG_NOMATCH)
-		{
-			char *target = xstrndup (lines.vector[i] + groups[1].rm_so,
-				groups[1].rm_eo - groups[1].rm_so);
-			if (utf8_validate (target, strlen (target)))
-				strv_append_owned (out, target);
-			else
-			{
-				strv_append_owned (out, latin1_to_utf8 (target));
-				free (target);
-			}
-		}
+		streams_tab_filter (lines.vector[i], re, out);
 	regex_free (re);
 	strv_free (&lines);
 }
