@@ -133,8 +133,7 @@ xbasename (const char *path)
 static char *
 latin1_to_utf8 (const char *latin1)
 {
-	struct str converted;
-	str_init (&converted);
+	struct str converted = str_make ();
 	while (*latin1)
 	{
 		uint8_t c = *latin1++;
@@ -273,7 +272,7 @@ poller_curl_on_socket_action (CURL *easy, curl_socket_t s, int what,
 		fd = xmalloc (sizeof *fd);
 		LIST_PREPEND (self->fds, fd);
 
-		poller_fd_init (&fd->fd, self->poller, s);
+		fd->fd = poller_fd_make (self->poller, s);
 		fd->fd.dispatcher = poller_curl_on_socket;
 		fd->fd.user_data = self;
 		curl_multi_assign (self->multi, s, fd);
@@ -337,7 +336,7 @@ poller_curl_init (struct poller_curl *self, struct poller *poller,
 			"cURL setup failed", curl_multi_strerror (mres));
 	}
 
-	poller_timer_init (&self->timer, (self->poller = poller));
+	self->timer = poller_timer_make ((self->poller = poller));
 	self->timer.dispatcher = poller_curl_on_timer;
 	self->timer.user_data = self;
 	return true;
@@ -418,10 +417,8 @@ typedef uint8_t *compact_map_t;         ///< Compacted (string -> string) map
 static compact_map_t
 compact_map (struct str_map *map)
 {
-	struct str s;
-	str_init (&s);
-	struct str_map_iter iter;
-	str_map_iter_init (&iter, map);
+	struct str s = str_make ();
+	struct str_map_iter iter = str_map_iter_make (map);
 
 	char *value;
 	static const size_t zero = 0, alignment = sizeof zero;
@@ -755,8 +752,7 @@ load_config_streams (struct config_item *subtree, void *user_data)
 	// XXX: we can't use the tab in load_config_streams() because it hasn't
 	//   been initialized yet, and we cannot initialize it before the
 	//   configuration has been loaded.  Thus we load it into the app_context.
-	struct str_map_iter iter;
-	str_map_iter_init (&iter, &subtree->value.object);
+	struct str_map_iter iter = str_map_iter_make (&subtree->value.object);
 	struct config_item *item;
 	while ((item = str_map_iter_next (&iter)))
 		if (!config_item_type_is_string (item->type))
@@ -820,14 +816,13 @@ static void
 app_init_context (void)
 {
 	poller_init (&g.poller);
-	mpd_client_init (&g.client, &g.poller);
-	config_init (&g.config);
-	strv_init (&g.streams);
+	g.client = mpd_client_make (&g.poller);
+	g.config = config_make ();
+	g.streams = strv_make ();
 	item_list_init (&g.playlist);
 
-	str_map_init (&g.playback_info);
+	g.playback_info = str_map_make (free);
 	g.playback_info.key_xfrm = tolower_ascii_strxfrm;
-	g.playback_info.free = free;
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
@@ -940,8 +935,7 @@ app_flush_buffer (struct row_buffer *buf, int width, chtype attrs)
 static void
 app_write_line (const char *str, chtype attrs)
 {
-	struct row_buffer buf;
-	row_buffer_init (&buf);
+	struct row_buffer buf = row_buffer_make ();
 	row_buffer_append (&buf, str, attrs);
 	app_flush_buffer (&buf, COLS, attrs);
 }
@@ -970,8 +964,7 @@ app_draw_song_info (void)
 	 || (title = compact_map_find (map, "name"))
 	 || (title = compact_map_find (map, "file")))
 	{
-		struct row_buffer buf;
-		row_buffer_init (&buf);
+		struct row_buffer buf = row_buffer_make ();
 		row_buffer_append (&buf, title, attr_highlight);
 		app_flush_header (&buf, attr_normal);
 	}
@@ -981,9 +974,7 @@ app_draw_song_info (void)
 	if (!artist && !album)
 		return;
 
-	struct row_buffer buf;
-	row_buffer_init (&buf);
-
+	struct row_buffer buf = row_buffer_make ();
 	if (artist)
 		row_buffer_append_args (&buf, " by "   + !buf.total_width, attr_normal,
 			artist, attr_highlight, NULL);
@@ -999,9 +990,7 @@ app_time_string (int seconds)
 	int minutes = seconds / 60; seconds %= 60;
 	int hours   = minutes / 60; minutes %= 60;
 
-	struct str s;
-	str_init (&s);
-
+	struct str s = str_make ();
 	if (hours)
 		str_append_printf (&s, "%d:%02d:", hours, minutes);
 	else
@@ -1055,9 +1044,7 @@ app_draw_status (void)
 	chtype attr_normal    = APP_ATTR (NORMAL);
 	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
 
-	struct row_buffer buf;
-	row_buffer_init (&buf);
-
+	struct row_buffer buf = row_buffer_make ();
 	bool stopped = g.state == PLAYER_STOPPED;
 	chtype attr_song_action = stopped ? attr_normal : attr_highlight;
 
@@ -1142,10 +1129,8 @@ app_draw_header (void)
 
 	chtype attrs[2] = { APP_ATTR (TAB_BAR), APP_ATTR (TAB_ACTIVE) };
 
-	struct row_buffer buf;
-	row_buffer_init (&buf);
-
 	// The help tab is disguised so that it's not too intruding
+	struct row_buffer buf = row_buffer_make ();
 	row_buffer_append (&buf, APP_TITLE, attrs[g.active_tab == g.help_tab]);
 	row_buffer_append (&buf, " ", attrs[false]);
 
@@ -1157,7 +1142,7 @@ app_draw_header (void)
 	const char *header = g.active_tab->header;
 	if (header)
 	{
-		row_buffer_init (&buf);
+		buf = row_buffer_make ();
 		row_buffer_append (&buf, header, APP_ATTR (HEADER));
 		app_flush_header (&buf, APP_ATTR (HEADER));
 	}
@@ -1236,8 +1221,7 @@ app_draw_scrollbar (void)
 
 		move (g.header_height + row, COLS - 1);
 
-		struct row_buffer buf;
-		row_buffer_init (&buf);
+		struct row_buffer buf = row_buffer_make ();
 		row_buffer_append (&buf, c, attrs);
 		row_buffer_flush (&buf);
 		row_buffer_free (&buf);
@@ -1263,8 +1247,7 @@ app_draw_view (void)
 		if (item_index == tab->item_selected)
 			row_attrs = APP_ATTR (SELECTION);
 
-		struct row_buffer buf;
-		row_buffer_init (&buf);
+		struct row_buffer buf = row_buffer_make ();
 		tab->on_item_draw (item_index, &buf, view_width);
 
 		// Combine attributes used by the handler with the defaults.
@@ -1291,9 +1274,7 @@ app_draw_view (void)
 static void
 app_write_mpd_status_playlist (struct row_buffer *buf)
 {
-	struct str stats;
-	str_init (&stats);
-
+	struct str stats = str_make ();
 	if (g.playlist.len == 1)
 		str_append_printf (&stats, "1 song ");
 	else
@@ -1328,9 +1309,6 @@ app_write_mpd_status (struct row_buffer *buf)
 	else
 		app_write_mpd_status_playlist (buf);
 
-	struct row_buffer right;
-	row_buffer_init (&right);
-
 	const char *s;
 	bool repeat  = (s = str_map_find (map, "repeat"))  && strcmp (s, "0");
 	bool random  = (s = str_map_find (map, "random"))  && strcmp (s, "0");
@@ -1338,6 +1316,7 @@ app_write_mpd_status (struct row_buffer *buf)
 	bool consume = (s = str_map_find (map, "consume")) && strcmp (s, "0");
 
 	// TODO: remove the conditionals once we make them clickable
+	struct row_buffer right = row_buffer_make ();
 	chtype a[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
 	if (repeat)  row_buffer_append_args (&right,
 		" ", APP_ATTR (NORMAL), "repeat",  a[repeat],  NULL);
@@ -1358,9 +1337,7 @@ app_write_mpd_status (struct row_buffer *buf)
 static void
 app_draw_statusbar (void)
 {
-	struct row_buffer buf;
-	row_buffer_init (&buf);
-
+	struct row_buffer buf = row_buffer_make ();
 	if (g.message)
 		row_buffer_append (&buf, g.message, APP_ATTR (HIGHLIGHT));
 	else if (g.client.state == MPD_CONNECTED)
@@ -1555,9 +1532,7 @@ g_actions[] =
 static void
 mpd_client_vsend_command (struct mpd_client *self, va_list ap)
 {
-	struct strv v;
-	strv_init (&v);
-
+	struct strv v = strv_make ();
 	const char *command;
 	while ((command = va_arg (ap, const char *)))
 		strv_append (&v, command);
@@ -2182,8 +2157,7 @@ library_tab_on_data (const struct mpd_response *response,
 		free (parent);
 	}
 
-	struct str_map map;
-	str_map_init (&map);
+	struct str_map map = str_map_make (NULL);
 	map.key_xfrm = tolower_ascii_strxfrm;
 
 	char *key, *value, type;
@@ -2289,8 +2263,8 @@ library_tab_on_action (enum action action)
 static struct tab *
 library_tab_init (void)
 {
-	str_init (&g_library_tab.path);
-	strv_init (&g_library_tab.items);
+	g_library_tab.path = str_make ();
+	g_library_tab.items = strv_make ();
 
 	struct tab *super = &g_library_tab.super;
 	tab_init (super, "Library");
@@ -2355,8 +2329,7 @@ streams_tab_parse_playlist (const char *playlist, const char *content_type,
 	struct strv *out)
 {
 	// We accept a lot of very broken stuff because this is the real world
-	struct strv lines;
-	strv_init (&lines);
+	struct strv lines = strv_make ();
 	cstr_split (playlist, "\r\n", true, &lines);
 
 	// Since this excludes '"', it should even work for XMLs (w/o entities)
@@ -2436,9 +2409,7 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	if (self->replace)
 		mpd_client_send_command (c, "clear", NULL);
 
-	struct strv links;
-	strv_init (&links);
-
+	struct strv links = strv_make ();
 	if (!streams_tab_extract_links (&self->data, type, &links))
 		strv_append (&links, uri);
 	for (size_t i = 0; i < links.len; i++)
@@ -2477,7 +2448,7 @@ streams_tab_process (const char *uri, bool replace, struct error **e)
 	hard_assert (poller_curl_spawn (&task.curl, NULL));
 
 	CURL *easy = task.curl.easy;
-	str_init (&task.data);
+	task.data = str_make ();
 	task.replace = replace;
 	bool result = false;
 
@@ -2633,8 +2604,8 @@ info_tab_update (void)
 static struct tab *
 info_tab_init (void)
 {
-	strv_init (&g_info_tab.keys);
-	strv_init (&g_info_tab.values);
+	g_info_tab.keys = strv_make ();
+	g_info_tab.values = strv_make ();
 
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
@@ -2793,8 +2764,7 @@ mpd_update_playback_state (void)
 	const char *elapsed  = str_map_find (map, "elapsed");
 	const char *duration = str_map_find (map, "duration");
 
-	struct strv fields;
-	strv_init (&fields);
+	struct strv fields = strv_make ();
 	if (time)
 	{
 		cstr_split (time, ":", false, &fields);
@@ -2848,8 +2818,7 @@ mpd_process_info (const struct strv *data)
 	}
 
 	// It's much better to process the playlist from the back
-	struct str_map item;
-	str_map_init (&item);
+	struct str_map item = str_map_make (NULL);
 	item.key_xfrm = tolower_ascii_strxfrm;
 	for (size_t i = data->len - 1; i-- && data->vector[i]; )
 	{
@@ -3225,8 +3194,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 
 	in_processing = true;
 
-	struct str message;
-	str_init (&message);
+	struct str message = str_make ();
 	str_append (&message, quote);
 	str_append_vprintf (&message, fmt, ap);
 
@@ -3252,28 +3220,28 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 static void
 app_init_poller_events (void)
 {
-	poller_fd_init (&g.signal_event, &g.poller, g_signal_pipe[0]);
+	g.signal_event = poller_fd_make (&g.poller, g_signal_pipe[0]);
 	g.signal_event.dispatcher = app_on_signal_pipe_readable;
 	poller_fd_set (&g.signal_event, POLLIN);
 
-	poller_fd_init (&g.tty_event, &g.poller, STDIN_FILENO);
+	g.tty_event = poller_fd_make (&g.poller, STDIN_FILENO);
 	g.tty_event.dispatcher = app_on_tty_readable;
 	poller_fd_set (&g.tty_event, POLLIN);
 
-	poller_timer_init (&g.message_timer, &g.poller);
+	g.message_timer = poller_timer_make (&g.poller);
 	g.message_timer.dispatcher = app_on_message_timer;
 
-	poller_timer_init (&g.tk_timer, &g.poller);
+	g.tk_timer = poller_timer_make (&g.poller);
 	g.tk_timer.dispatcher = app_on_key_timer;
 
-	poller_timer_init (&g.connect_event, &g.poller);
+	g.connect_event = poller_timer_make (&g.poller);
 	g.connect_event.dispatcher = app_on_reconnect;
 	poller_timer_set (&g.connect_event, 0);
 
-	poller_timer_init (&g.elapsed_event, &g.poller);
+	g.elapsed_event = poller_timer_make (&g.poller);
 	g.elapsed_event.dispatcher = mpd_on_tick;
 
-	poller_idle_init (&g.refresh_event, &g.poller);
+	g.refresh_event = poller_idle_make (&g.poller);
 	g.refresh_event.dispatcher = app_on_refresh;
 }
 
@@ -3288,8 +3256,8 @@ main (int argc, char *argv[])
 		{ 0, NULL, NULL, 0, NULL }
 	};
 
-	struct opt_handler oh;
-	opt_handler_init (&oh, argc, argv, opts, NULL, "MPD client.");
+	struct opt_handler oh =
+		opt_handler_make (argc, argv, opts, NULL, "MPD client.");
 
 	int c;
 	while ((c = opt_handler_get (&oh)) != -1)

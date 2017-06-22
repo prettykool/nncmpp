@@ -3,9 +3,8 @@ cmake_minimum_required (VERSION 2.8.5)
 
 # Moar warnings
 if ("${CMAKE_C_COMPILER_ID}" MATCHES "GNU" OR CMAKE_COMPILER_IS_GNUC)
-	set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99")
-	set (CMAKE_C_FLAGS_DEBUG
-		"${CMAKE_C_FLAGS_DEBUG} -Wall -Wextra -Wno-unused-function")
+	set (wdisabled "-Wno-unused-function -Wno-implicit-fallthrough")
+	set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -Wall -Wextra ${wdisabled}")
 endif ("${CMAKE_C_COMPILER_ID}" MATCHES "GNU" OR CMAKE_COMPILER_IS_GNUC)
 
 # Version
