@@ -459,11 +459,12 @@ struct item_list
 	size_t alloc;                       ///< Allocated items
 };
 
-static void
-item_list_init (struct item_list *self)
+static struct item_list
+item_list_make (void)
 {
-	memset (self, 0, sizeof *self);
-	self->items = xcalloc (sizeof *self->items, (self->alloc = 16));
+	struct item_list self = {};
+	self.items = xcalloc (sizeof *self.items, (self.alloc = 16));
+	return self;
 }
 
 static void
@@ -819,7 +820,7 @@ app_init_context (void)
 	g.client = mpd_client_make (&g.poller);
 	g.config = config_make ();
 	g.streams = strv_make ();
-	item_list_init (&g.playlist);
+	g.playlist = item_list_make ();
 
 	g.playback_info = str_map_make (free);
 	g.playback_info.key_xfrm = tolower_ascii_strxfrm;
