@@ -636,6 +636,7 @@ static struct app_context
 
 	int editor_point;                   ///< Caret index into line data
 	ARRAY (ucs4_t, editor_line)         ///< Line data
+	ARRAY (int, editor_w)               ///< Codepoint widths
 	void (*on_editor_changed) (void);   ///< Callback on text change
 	void (*on_editor_end) (bool);       ///< Callback on abort
 
@@ -883,6 +884,7 @@ app_free_context (void)
 	item_list_free (&g.playlist);
 
 	free (g.editor_line);
+	free (g.editor_w);
 
 	config_free (&g.config);
 	poller_free (&g.poller);
@@ -1361,11 +1363,15 @@ app_write_editor (struct row_buffer *row)
 	// TODO: there should be a one-character prefix to distinguish operations
 	//   (also known as the prompt)
 	// TODO: some scrolling mechanism
+	//    - left = point - COLS/2 worth of cells
+	//    - while there's space on the right, move the left further
+	//   This seems to work in all cases.
+
 	int offset = 0;
 	for (size_t i = 0; i < g.editor_line_len; i++)
 	{
 		if (g.editor_point > (int) i)
-			offset += uc_width (g.editor_line[i], locale_charset ());
+			offset += g.editor_w[i];
 		row_buffer_append_c (row, g.editor_line[i], APP_ATTR (HIGHLIGHT));
 	}
 	return MIN (offset, COLS - 1);
@@ -1604,9 +1610,13 @@ app_editor_abort (bool status)
 	g.on_editor_end = NULL;
 
 	free (g.editor_line);
+	free (g.editor_w);
 	g.editor_line = NULL;
+	g.editor_w = NULL;
 	g.editor_line_alloc = 0;
+	g.editor_w_alloc = 0;
 	g.editor_line_len = 0;
+	g.editor_w_len = 0;
 }
 
 /// Start the line editor; remember to fill in "change" and "abort" callbacks
@@ -1614,6 +1624,7 @@ static void
 app_editor_start (void)
 {
 	ARRAY_INIT (g.editor_line);
+	ARRAY_INIT (g.editor_w);
 	g.editor_point = 0;
 	app_invalidate ();
 }
@@ -1623,6 +1634,15 @@ app_editor_changed (void)
 {
 	if (g.on_editor_changed)
 		g.on_editor_changed ();
+}
+
+static void
+app_editor_move (int to, int from, int len)
+{
+	memmove (g.editor_line + to, g.editor_line + from,
+		sizeof *g.editor_line * len);
+	memmove (g.editor_w + to, g.editor_w + from,
+		sizeof *g.editor_w * len);
 }
 
 static bool
@@ -1680,18 +1700,20 @@ app_editor_process_action (enum action action)
 	case ACTION_EDITOR_B_DELETE:
 		if (g.editor_point < 1)
 			return false;
-		memmove (g.editor_line + g.editor_point - 1,
-			g.editor_line + g.editor_point,
-			sizeof *g.editor_line * (g.editor_line_len-- - g.editor_point));
+		app_editor_move (g.editor_point - 1, g.editor_point,
+			g.editor_line_len - g.editor_point);
+		g.editor_line_len--;
+		g.editor_w_len--;
 		g.editor_point--;
 		app_editor_changed ();
 		return true;
 	case ACTION_EDITOR_F_DELETE:
 		if (g.editor_point + 1 > (int) g.editor_line_len)
 			return false;
-		memmove (g.editor_line + g.editor_point,
-			g.editor_line + g.editor_point + 1,
-			sizeof *g.editor_line * (--g.editor_line_len - g.editor_point));
+		g.editor_line_len--;
+		g.editor_w_len--;
+		app_editor_move (g.editor_point, g.editor_point + 1,
+			g.editor_line_len - g.editor_point);
 		app_editor_changed ();
 		return true;
 	case ACTION_EDITOR_B_KILL_WORD:
@@ -1704,20 +1726,24 @@ app_editor_process_action (enum action action)
 		while (i-- && g.editor_line[i] != ' ');
 		i++;
 
-		memmove (g.editor_line + i, g.editor_line + g.editor_point,
-			sizeof *g.editor_line * (g.editor_line_len - g.editor_point));
+		app_editor_move (i, g.editor_point,
+			(g.editor_line_len - g.editor_point));
 		g.editor_line_len -= g.editor_point - i;
+		g.editor_w_len -= g.editor_point - i;
 		g.editor_point = i;
 		app_editor_changed ();
 		return true;
 	}
 	case ACTION_EDITOR_B_KILL_LINE:
-		memmove (g.editor_line, g.editor_line + g.editor_point,
-			sizeof *g.editor_line * (g.editor_line_len -= g.editor_point));
+		g.editor_line_len -= g.editor_point;
+		g.editor_w_len -= g.editor_point;
+		app_editor_move (0, g.editor_point, g.editor_line_len);
+		g.editor_point = 0;
 		app_editor_changed ();
 		return true;
 	case ACTION_EDITOR_F_KILL_LINE:
 		g.editor_line_len = g.editor_point;
+		g.editor_w_len = g.editor_point;
 		app_editor_changed ();
 		return true;
 	}
@@ -1727,10 +1753,15 @@ static void
 app_editor_insert (ucs4_t codepoint)
 {
 	ARRAY_RESERVE (g.editor_line, 1);
-	memmove (g.editor_line + g.editor_point + 1, g.editor_line + g.editor_point,
-		sizeof *g.editor_line * (g.editor_line_len - g.editor_point));
-	g.editor_line[g.editor_point++] = codepoint;
+	ARRAY_RESERVE (g.editor_w, 1);
+	app_editor_move (g.editor_point + 1, g.editor_point,
+		g.editor_line_len - g.editor_point);
+	g.editor_line[g.editor_point] = codepoint;
+	// FIXME: this should care about app_is_character_in_locale() as well
+	g.editor_w[g.editor_point] = uc_width (codepoint, locale_charset ());
+	g.editor_point++;
 	g.editor_line_len++;
+	g.editor_w_len++;
 	app_editor_changed ();
 }
 
