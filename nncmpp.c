@@ -635,8 +635,10 @@ static struct app_context
 	// Line editor:
 
 	int editor_point;                   ///< Caret index into line data
-	ARRAY (ucs4_t, editor_line)         ///< Line data
-	ARRAY (int, editor_w)               ///< Codepoint widths
+	ucs4_t *editor_line;                ///< Line data, 0-terminated
+	int *editor_w;                      ///< Codepoint widths, 0-terminated
+	size_t editor_len;                  ///< Editor length
+	size_t editor_alloc;                ///< Editor allocated
 	void (*on_editor_changed) (void);   ///< Callback on text change
 	void (*on_editor_end) (bool);       ///< Callback on abort
 
@@ -1368,7 +1370,7 @@ app_write_editor (struct row_buffer *row)
 	//   This seems to work in all cases.
 
 	int offset = 0;
-	for (size_t i = 0; i < g.editor_line_len; i++)
+	for (size_t i = 0; i < g.editor_len; i++)
 	{
 		if (g.editor_point > (int) i)
 			offset += g.editor_w[i];
@@ -1613,18 +1615,18 @@ app_editor_abort (bool status)
 	free (g.editor_w);
 	g.editor_line = NULL;
 	g.editor_w = NULL;
-	g.editor_line_alloc = 0;
-	g.editor_w_alloc = 0;
-	g.editor_line_len = 0;
-	g.editor_w_len = 0;
+	g.editor_alloc = 0;
+	g.editor_len = 0;
 }
 
 /// Start the line editor; remember to fill in "change" and "abort" callbacks
 static void
 app_editor_start (void)
 {
-	ARRAY_INIT (g.editor_line);
-	ARRAY_INIT (g.editor_w);
+	g.editor_alloc = 16;
+	g.editor_line = xcalloc (sizeof *g.editor_line, g.editor_alloc);
+	g.editor_w = xcalloc (sizeof *g.editor_w, g.editor_alloc);
+	g.editor_len = 0;
 	g.editor_point = 0;
 	app_invalidate ();
 }
@@ -1632,6 +1634,9 @@ app_editor_start (void)
 static void
 app_editor_changed (void)
 {
+	g.editor_line[g.editor_len] = 0;
+	g.editor_w[g.editor_len] = 0;
+
 	if (g.on_editor_changed)
 		g.on_editor_changed ();
 }
@@ -1666,7 +1671,7 @@ app_editor_process_action (enum action action)
 		g.editor_point--;
 		return true;
 	case ACTION_EDITOR_F_CHAR:
-		if (g.editor_point + 1 > (int) g.editor_line_len)
+		if (g.editor_point + 1 > (int) g.editor_len)
 			return false;
 		g.editor_point++;
 		return true;
@@ -1682,11 +1687,11 @@ app_editor_process_action (enum action action)
 	}
 	case ACTION_EDITOR_F_WORD:
 	{
-		if (g.editor_point + 1 > (int) g.editor_line_len)
+		if (g.editor_point + 1 > (int) g.editor_len)
 			return false;
 		int i = g.editor_point;
-		while (i < (int) g.editor_line_len && g.editor_line[i] != ' ') i++;
-		while (i < (int) g.editor_line_len && g.editor_line[i] == ' ') i++;
+		while (i < (int) g.editor_len && g.editor_line[i] != ' ') i++;
+		while (i < (int) g.editor_len && g.editor_line[i] == ' ') i++;
 		g.editor_point = i;
 		return true;
 	}
@@ -1694,26 +1699,24 @@ app_editor_process_action (enum action action)
 		g.editor_point = 0;
 		return true;
 	case ACTION_EDITOR_END:
-		g.editor_point = g.editor_line_len;
+		g.editor_point = g.editor_len;
 		return true;
 
 	case ACTION_EDITOR_B_DELETE:
 		if (g.editor_point < 1)
 			return false;
 		app_editor_move (g.editor_point - 1, g.editor_point,
-			g.editor_line_len - g.editor_point);
-		g.editor_line_len--;
-		g.editor_w_len--;
+			g.editor_len - g.editor_point);
+		g.editor_len--;
 		g.editor_point--;
 		app_editor_changed ();
 		return true;
 	case ACTION_EDITOR_F_DELETE:
-		if (g.editor_point + 1 > (int) g.editor_line_len)
+		if (g.editor_point + 1 > (int) g.editor_len)
 			return false;
-		g.editor_line_len--;
-		g.editor_w_len--;
+		g.editor_len--;
 		app_editor_move (g.editor_point, g.editor_point + 1,
-			g.editor_line_len - g.editor_point);
+			g.editor_len - g.editor_point);
 		app_editor_changed ();
 		return true;
 	case ACTION_EDITOR_B_KILL_WORD:
@@ -1726,24 +1729,20 @@ app_editor_process_action (enum action action)
 		while (i-- && g.editor_line[i] != ' ');
 		i++;
 
-		app_editor_move (i, g.editor_point,
-			(g.editor_line_len - g.editor_point));
-		g.editor_line_len -= g.editor_point - i;
-		g.editor_w_len -= g.editor_point - i;
+		app_editor_move (i, g.editor_point, (g.editor_len - g.editor_point));
+		g.editor_len -= g.editor_point - i;
 		g.editor_point = i;
 		app_editor_changed ();
 		return true;
 	}
 	case ACTION_EDITOR_B_KILL_LINE:
-		g.editor_line_len -= g.editor_point;
-		g.editor_w_len -= g.editor_point;
-		app_editor_move (0, g.editor_point, g.editor_line_len);
+		g.editor_len -= g.editor_point;
+		app_editor_move (0, g.editor_point, g.editor_len);
 		g.editor_point = 0;
 		app_editor_changed ();
 		return true;
 	case ACTION_EDITOR_F_KILL_LINE:
-		g.editor_line_len = g.editor_point;
-		g.editor_w_len = g.editor_point;
+		g.editor_len = g.editor_point;
 		app_editor_changed ();
 		return true;
 	}
@@ -1752,16 +1751,21 @@ app_editor_process_action (enum action action)
 static void
 app_editor_insert (ucs4_t codepoint)
 {
-	ARRAY_RESERVE (g.editor_line, 1);
-	ARRAY_RESERVE (g.editor_w, 1);
+	while (g.editor_alloc - g.editor_len < 2)
+	{
+		g.editor_alloc <<= 1;
+		g.editor_line = xreallocarray
+			(g.editor_line, sizeof *g.editor_line, g.editor_alloc);
+		g.editor_w = xreallocarray
+			(g.editor_w, sizeof *g.editor_w, g.editor_alloc);
+	}
 	app_editor_move (g.editor_point + 1, g.editor_point,
-		g.editor_line_len - g.editor_point);
+		g.editor_len - g.editor_point);
 	g.editor_line[g.editor_point] = codepoint;
 	// FIXME: this should care about app_is_character_in_locale() as well
 	g.editor_w[g.editor_point] = uc_width (codepoint, locale_charset ());
 	g.editor_point++;
-	g.editor_line_len++;
-	g.editor_w_len++;
+	g.editor_len++;
 	app_editor_changed ();
 }
 
