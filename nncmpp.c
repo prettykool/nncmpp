@@ -639,6 +639,7 @@ static struct app_context
 	int *editor_w;                      ///< Codepoint widths, 0-terminated
 	size_t editor_len;                  ///< Editor length
 	size_t editor_alloc;                ///< Editor allocated
+	char editor_prompt;                 ///< Prompt character
 	void (*on_editor_changed) (void);   ///< Callback on text change
 	void (*on_editor_end) (bool);       ///< Callback on abort
 
@@ -1362,21 +1363,33 @@ row_buffer_append_c (struct row_buffer *self, ucs4_t c, chtype attrs)
 static int
 app_write_editor (struct row_buffer *row)
 {
-	// TODO: there should be a one-character prefix to distinguish operations
-	//   (also known as the prompt)
-	// TODO: some scrolling mechanism
-	//    - left = point - COLS/2 worth of cells
-	//    - while there's space on the right, move the left further
-	//   This seems to work in all cases.
-
-	int offset = 0;
-	for (size_t i = 0; i < g.editor_len; i++)
+	int limit = COLS;
+	if (g.editor_prompt)
 	{
-		if (g.editor_point > (int) i)
-			offset += g.editor_w[i];
-		row_buffer_append_c (row, g.editor_line[i], APP_ATTR (HIGHLIGHT));
+		hard_assert (g.editor_prompt < 127);
+		row_buffer_append_c (row, g.editor_prompt, APP_ATTR (HIGHLIGHT));
+		limit--;
 	}
-	return MIN (offset, COLS - 1);
+
+	int following = 0;
+	for (size_t i = g.editor_point; i < g.editor_len; i++)
+		following += g.editor_w[i];
+
+	int preceding = 0;
+	size_t start = g.editor_point;
+	while (start && preceding < limit / 2)
+		preceding += g.editor_w[--start];
+
+	// There can be one extra space at the end of the line but this way we
+	// don't need to care about non-spacing marks following full-width chars
+	while (start && limit - preceding - following > 2 /* widest char */)
+		preceding += g.editor_w[--start];
+
+	// XXX: we should also show < > indicators for overflow but it'd probably
+	//   considerably complicate this algorithm
+	for (; start < g.editor_len; start++)
+		row_buffer_append_c (row, g.editor_line[start], APP_ATTR (HIGHLIGHT));
+	return !!g.editor_prompt + preceding;
 }
 
 static void
@@ -1612,22 +1625,25 @@ app_editor_abort (bool status)
 	g.on_editor_end = NULL;
 
 	free (g.editor_line);
-	free (g.editor_w);
 	g.editor_line = NULL;
+	free (g.editor_w);
 	g.editor_w = NULL;
 	g.editor_alloc = 0;
 	g.editor_len = 0;
+	g.editor_point = 0;
+	g.editor_prompt = 0;
 }
 
 /// Start the line editor; remember to fill in "change" and "abort" callbacks
 static void
-app_editor_start (void)
+app_editor_start (char prompt)
 {
 	g.editor_alloc = 16;
 	g.editor_line = xcalloc (sizeof *g.editor_line, g.editor_alloc);
 	g.editor_w = xcalloc (sizeof *g.editor_w, g.editor_alloc);
 	g.editor_len = 0;
 	g.editor_point = 0;
+	g.editor_prompt = prompt;
 	app_invalidate ();
 }
 
@@ -1751,7 +1767,7 @@ app_editor_process_action (enum action action)
 static void
 app_editor_insert (ucs4_t codepoint)
 {
-	while (g.editor_alloc - g.editor_len < 2)
+	while (g.editor_alloc - g.editor_len < 2 /* inserted + sentinel */)
 	{
 		g.editor_alloc <<= 1;
 		g.editor_line = xreallocarray
@@ -1759,11 +1775,14 @@ app_editor_insert (ucs4_t codepoint)
 		g.editor_w = xreallocarray
 			(g.editor_w, sizeof *g.editor_w, g.editor_alloc);
 	}
+
 	app_editor_move (g.editor_point + 1, g.editor_point,
 		g.editor_len - g.editor_point);
 	g.editor_line[g.editor_point] = codepoint;
-	// FIXME: this should care about app_is_character_in_locale() as well
-	g.editor_w[g.editor_point] = uc_width (codepoint, locale_charset ());
+	g.editor_w[g.editor_point] = app_is_character_in_locale (codepoint)
+		? uc_width (codepoint, locale_charset ())
+		: 1 /* the replacement question mark */;
+
 	g.editor_point++;
 	g.editor_len++;
 	app_editor_changed ();
