@@ -1724,22 +1724,34 @@ app_editor_process_action (enum action action)
 		return true;
 
 	case ACTION_EDITOR_B_DELETE:
+	{
 		if (g.editor_point < 1)
 			return false;
-		app_editor_move (g.editor_point - 1, g.editor_point,
+		int len = 1;
+		while (g.editor_point - len > 0
+			&& !g.editor_w[g.editor_point - len])
+			len++;
+		app_editor_move (g.editor_point - len, g.editor_point,
 			g.editor_len - g.editor_point);
-		g.editor_len--;
-		g.editor_point--;
+		g.editor_len -= len;
+		g.editor_point -= len;
 		app_editor_changed ();
 		return true;
+	}
 	case ACTION_EDITOR_F_DELETE:
+	{
 		if (g.editor_point + 1 > (int) g.editor_len)
 			return false;
-		g.editor_len--;
-		app_editor_move (g.editor_point, g.editor_point + 1,
+		int len = 1;
+		while (g.editor_point + len < (int) g.editor_len
+			&& !g.editor_w[g.editor_point + len])
+			len++;
+		g.editor_len -= len;
+		app_editor_move (g.editor_point, g.editor_point + len,
 			g.editor_len - g.editor_point);
 		app_editor_changed ();
 		return true;
+	}
 	case ACTION_EDITOR_B_KILL_WORD:
 	{
 		if (g.editor_point < 1)
