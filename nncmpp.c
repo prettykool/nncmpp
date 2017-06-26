@@ -2090,8 +2090,8 @@ static struct binding
 	enum action action;                 ///< Action to take
 	int order;                          ///< Order for stable sorting
 }
-*g_normal_bindings, *g_editor_bindings;
-static size_t g_normal_bindings_len, g_editor_bindings_len;
+*g_normal_keys, *g_editor_keys;
+static size_t g_normal_keys_len, g_editor_keys_len;
 
 static struct binding_default
 {
@@ -2205,10 +2205,9 @@ app_next_binding (struct str_map_iter *iter, termo_key_t *key, int *action)
 	return false;
 }
 
-static void
+static struct binding *
 app_init_bindings (const char *keymap,
-	struct binding_default *defaults, size_t defaults_len,
-	struct binding **result, size_t *result_len)
+	struct binding_default *defaults, size_t defaults_len, size_t *result_len)
 {
 	ARRAY (struct binding, a)
 	ARRAY_INIT_SIZED (a, defaults_len);
@@ -2242,8 +2241,8 @@ app_init_bindings (const char *keymap,
 			a[out++] = a[in];
 	}
 
-	*result = a;
 	*result_len = out;
+	return a;
 }
 
 static bool
@@ -2252,8 +2251,8 @@ app_process_termo_event (termo_key_t *event)
 	struct binding dummy = { *event, 0, 0 }, *binding;
 	if (g.editor_line)
 	{
-		if ((binding = bsearch (&dummy, g_editor_bindings,
-			g_editor_bindings_len, sizeof *binding, app_binding_cmp)))
+		if ((binding = bsearch (&dummy, g_editor_keys, g_editor_keys_len,
+			sizeof *binding, app_binding_cmp)))
 			return app_editor_process_action (binding->action);
 		if (event->type != TERMO_TYPE_KEY || event->modifiers != 0)
 			return false;
@@ -2262,8 +2261,8 @@ app_process_termo_event (termo_key_t *event)
 		app_invalidate ();
 		return true;
 	}
-	if ((binding = bsearch (&dummy, g_normal_bindings,
-		g_normal_bindings_len, sizeof *binding, app_binding_cmp)))
+	if ((binding = bsearch (&dummy, g_normal_keys, g_normal_keys_len,
+		sizeof *binding, app_binding_cmp)))
 		return app_process_action (binding->action);
 
 	// TODO: parametrize actions, put this among other bindings
@@ -3040,8 +3039,8 @@ help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	//   - go through 0..ACTION_COUNT
 	//   - ...
 
-	hard_assert (item_index < g_normal_bindings_len);
-	struct binding *binding = &g_normal_bindings[item_index];
+	hard_assert (item_index < g_normal_keys_len);
+	struct binding *binding = &g_normal_keys[item_index];
 
 	// For display purposes, this is highly desirable
 	int flags = termo_get_flags (g.tk);
@@ -3064,7 +3063,7 @@ help_tab_init (void)
 	static struct tab super;
 	tab_init (&super, "Help");
 	super.on_item_draw = help_tab_on_item_draw;
-	super.item_count = g_normal_bindings_len;
+	super.item_count = g_normal_keys_len;
 	return &super;
 }
 
@@ -3727,12 +3726,10 @@ main (int argc, char *argv[])
 	signals_setup_handlers ();
 	app_init_poller_events ();
 
-	app_init_bindings ("normal",
-		g_normal_defaults, N_ELEMENTS (g_normal_defaults),
-		&g_normal_bindings, &g_normal_bindings_len);
-	app_init_bindings ("editor",
-		g_editor_defaults, N_ELEMENTS (g_editor_defaults),
-		&g_editor_bindings, &g_editor_bindings_len);
+	g_normal_keys = app_init_bindings ("normal",
+		g_normal_defaults, N_ELEMENTS (g_normal_defaults), &g_normal_keys_len);
+	g_editor_keys = app_init_bindings ("editor",
+		g_editor_defaults, N_ELEMENTS (g_editor_defaults), &g_editor_keys_len);
 
 	if (g_debug_mode)
 		app_prepend_tab (debug_tab_init ());
