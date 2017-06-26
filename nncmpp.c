@@ -1612,6 +1612,23 @@ g_actions[] =
 #undef XX
 };
 
+/// Accept a more human format of action-name instead of ACTION_NAME
+static int action_toupper (int c) { return c == '-' ? '_' : toupper_ascii (c); }
+
+static int
+action_resolve (const char *name)
+{
+	const unsigned char *s = (const unsigned char *) name;
+	for (int i = 0; i < ACTION_COUNT; i++)
+	{
+		const char *target = g_actions[i].name;
+		for (size_t k = 0; action_toupper (s[k]) == target[k]; k++)
+			if (!s[k] && !target[k])
+				return i;
+	}
+	return -1;
+}
+
 // --- Line editor -------------------------------------------------------------
 
 // TODO: move the editor out as a component to liberty-tui.c
@@ -2069,110 +2086,174 @@ app_process_mouse (termo_mouse_event_t type, int line, int column, int button,
 
 static struct binding
 {
+	termo_key_t decoded;                ///< Decoded key definition
+	enum action action;                 ///< Action to take
+	int order;                          ///< Order for stable sorting
+}
+*g_normal_bindings, *g_editor_bindings;
+static size_t g_normal_bindings_len, g_editor_bindings_len;
+
+static struct binding_default
+{
 	const char *key;                    ///< Key definition
 	enum action action;                 ///< Action to take
-	termo_key_t decoded;                ///< Decoded key definition
 }
-g_default_bindings[] =
+g_normal_defaults[] =
 {
-	{ "Escape",     ACTION_QUIT,               {}},
-	{ "q",          ACTION_QUIT,               {}},
-	{ "C-l",        ACTION_REDRAW,             {}},
-	{ "M-Tab",      ACTION_LAST_TAB,           {}},
-	{ "F1",         ACTION_HELP_TAB,           {}},
+	{ "Escape",     ACTION_QUIT               },
+	{ "q",          ACTION_QUIT               },
+	{ "C-l",        ACTION_REDRAW             },
+	{ "M-Tab",      ACTION_LAST_TAB           },
+	{ "F1",         ACTION_HELP_TAB           },
 
-	{ "Home",       ACTION_GOTO_TOP,           {}},
-	{ "End",        ACTION_GOTO_BOTTOM,        {}},
-	{ "M-<",        ACTION_GOTO_TOP,           {}},
-	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
-	{ "S-Up",       ACTION_MOVE_UP,            {}},
-	{ "S-Down",     ACTION_MOVE_DOWN,          {}},
-	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS, {}},
-	{ "Down",       ACTION_GOTO_ITEM_NEXT,     {}},
-	{ "k",          ACTION_GOTO_ITEM_PREVIOUS, {}},
-	{ "j",          ACTION_GOTO_ITEM_NEXT,     {}},
-	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS, {}},
-	{ "PageDown",   ACTION_GOTO_PAGE_NEXT,     {}},
-	{ "C-p",        ACTION_GOTO_ITEM_PREVIOUS, {}},
-	{ "C-n",        ACTION_GOTO_ITEM_NEXT,     {}},
-	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS, {}},
-	{ "C-f",        ACTION_GOTO_PAGE_NEXT,     {}},
+	{ "Home",       ACTION_GOTO_TOP           },
+	{ "End",        ACTION_GOTO_BOTTOM        },
+	{ "M-<",        ACTION_GOTO_TOP           },
+	{ "M->",        ACTION_GOTO_BOTTOM        },
+	{ "S-Up",       ACTION_MOVE_UP            },
+	{ "S-Down",     ACTION_MOVE_DOWN          },
+	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS },
+	{ "Down",       ACTION_GOTO_ITEM_NEXT     },
+	{ "k",          ACTION_GOTO_ITEM_PREVIOUS },
+	{ "j",          ACTION_GOTO_ITEM_NEXT     },
+	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS },
+	{ "PageDown",   ACTION_GOTO_PAGE_NEXT     },
+	{ "C-p",        ACTION_GOTO_ITEM_PREVIOUS },
+	{ "C-n",        ACTION_GOTO_ITEM_NEXT     },
+	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
+	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
 
-	{ "H",          ACTION_GOTO_VIEW_TOP,      {}},
-	{ "M",          ACTION_GOTO_VIEW_CENTER,   {}},
-	{ "L",          ACTION_GOTO_VIEW_BOTTOM,   {}},
+	{ "H",          ACTION_GOTO_VIEW_TOP      },
+	{ "M",          ACTION_GOTO_VIEW_CENTER   },
+	{ "L",          ACTION_GOTO_VIEW_BOTTOM   },
 
 	// Not sure how to set these up, they're pretty arbitrary so far
-	{ "Enter",      ACTION_CHOOSE,             {}},
-	{ "Delete",     ACTION_DELETE,             {}},
-	{ "Backspace",  ACTION_UP,                 {}},
-	{ "a",          ACTION_MPD_ADD,            {}},
-	{ "r",          ACTION_MPD_REPLACE,        {}},
-	{ ":",          ACTION_MPD_COMMAND,        {}},
+	{ "Enter",      ACTION_CHOOSE             },
+	{ "Delete",     ACTION_DELETE             },
+	{ "Backspace",  ACTION_UP                 },
+	{ "a",          ACTION_MPD_ADD            },
+	{ "r",          ACTION_MPD_REPLACE        },
+	{ ":",          ACTION_MPD_COMMAND        },
 
-	{ "Left",       ACTION_MPD_PREVIOUS,       {}},
-	{ "Right",      ACTION_MPD_NEXT,           {}},
-	{ "M-Left",     ACTION_MPD_BACKWARD,       {}},
-	{ "M-Right",    ACTION_MPD_FORWARD,        {}},
-	{ "h",          ACTION_MPD_PREVIOUS,       {}},
-	{ "l",          ACTION_MPD_NEXT,           {}},
-	{ "Space",      ACTION_MPD_TOGGLE,         {}},
-	{ "C-Space",    ACTION_MPD_STOP,           {}},
-	{ "u",          ACTION_MPD_UPDATE_DB,      {}},
-	{ "M-PageUp",   ACTION_MPD_VOLUME_UP,      {}},
-	{ "M-PageDown", ACTION_MPD_VOLUME_DOWN,    {}},
+	{ "Left",       ACTION_MPD_PREVIOUS       },
+	{ "Right",      ACTION_MPD_NEXT           },
+	{ "M-Left",     ACTION_MPD_BACKWARD       },
+	{ "M-Right",    ACTION_MPD_FORWARD        },
+	{ "h",          ACTION_MPD_PREVIOUS       },
+	{ "l",          ACTION_MPD_NEXT           },
+	{ "Space",      ACTION_MPD_TOGGLE         },
+	{ "C-Space",    ACTION_MPD_STOP           },
+	{ "u",          ACTION_MPD_UPDATE_DB      },
+	{ "M-PageUp",   ACTION_MPD_VOLUME_UP      },
+	{ "M-PageDown", ACTION_MPD_VOLUME_DOWN    },
 },
-g_editor_bindings[] =
+g_editor_defaults[] =
 {
-	{ "Left",       ACTION_EDITOR_B_CHAR,      {}},
-	{ "Right",      ACTION_EDITOR_F_CHAR,      {}},
-	{ "C-b",        ACTION_EDITOR_B_CHAR,      {}},
-	{ "C-f",        ACTION_EDITOR_F_CHAR,      {}},
-	{ "M-b",        ACTION_EDITOR_B_WORD,      {}},
-	{ "M-f",        ACTION_EDITOR_F_WORD,      {}},
-	{ "Home",       ACTION_EDITOR_HOME,        {}},
-	{ "End",        ACTION_EDITOR_END,         {}},
-	{ "C-a",        ACTION_EDITOR_HOME,        {}},
-	{ "C-e",        ACTION_EDITOR_END,         {}},
+	{ "Left",       ACTION_EDITOR_B_CHAR      },
+	{ "Right",      ACTION_EDITOR_F_CHAR      },
+	{ "C-b",        ACTION_EDITOR_B_CHAR      },
+	{ "C-f",        ACTION_EDITOR_F_CHAR      },
+	{ "M-b",        ACTION_EDITOR_B_WORD      },
+	{ "M-f",        ACTION_EDITOR_F_WORD      },
+	{ "Home",       ACTION_EDITOR_HOME        },
+	{ "End",        ACTION_EDITOR_END         },
+	{ "C-a",        ACTION_EDITOR_HOME        },
+	{ "C-e",        ACTION_EDITOR_END         },
 
-	{ "C-h",        ACTION_EDITOR_B_DELETE,    {}},
-	{ "DEL",        ACTION_EDITOR_B_DELETE,    {}},
-	{ "Backspace",  ACTION_EDITOR_B_DELETE,    {}},
-	{ "C-d",        ACTION_EDITOR_F_DELETE,    {}},
-	{ "Delete",     ACTION_EDITOR_F_DELETE,    {}},
-	{ "C-u",        ACTION_EDITOR_B_KILL_LINE, {}},
-	{ "C-k",        ACTION_EDITOR_F_KILL_LINE, {}},
-	{ "C-w",        ACTION_EDITOR_B_KILL_WORD, {}},
+	{ "C-h",        ACTION_EDITOR_B_DELETE    },
+	{ "DEL",        ACTION_EDITOR_B_DELETE    },
+	{ "Backspace",  ACTION_EDITOR_B_DELETE    },
+	{ "C-d",        ACTION_EDITOR_F_DELETE    },
+	{ "Delete",     ACTION_EDITOR_F_DELETE    },
+	{ "C-u",        ACTION_EDITOR_B_KILL_LINE },
+	{ "C-k",        ACTION_EDITOR_F_KILL_LINE },
+	{ "C-w",        ACTION_EDITOR_B_KILL_WORD },
 
-	{ "C-g",        ACTION_QUIT,               {}},
-	{ "Escape",     ACTION_QUIT,               {}},
-	{ "Enter",      ACTION_EDITOR_CONFIRM,     {}},
+	{ "C-g",        ACTION_QUIT               },
+	{ "Escape",     ACTION_QUIT               },
+	{ "Enter",      ACTION_EDITOR_CONFIRM     },
 };
 
 static int
 app_binding_cmp (const void *a, const void *b)
 {
-	return termo_keycmp (g.tk,
-		&((struct binding *) a)->decoded, &((struct binding *) b)->decoded);
+	const struct binding *aa = a, *bb = b;
+	int cmp = termo_keycmp (g.tk, &aa->decoded, &bb->decoded);
+	return cmp ? cmp : bb->order - aa->order;
+}
+
+static bool
+app_next_binding (struct str_map_iter *iter, termo_key_t *key, int *action)
+{
+	struct config_item *v;
+	while ((v = str_map_iter_next (iter)))
+	{
+		*action = ACTION_NONE;
+		if (*termo_strpkey_utf8 (g.tk,
+			iter->link->key, key, TERMO_FORMAT_ALTISMETA))
+			print_error ("%s: invalid binding", iter->link->key);
+		else if (v->type == CONFIG_ITEM_NULL)
+			return true;
+		else if (v->type != CONFIG_ITEM_STRING)
+			print_error ("%s: bindings must be strings", iter->link->key);
+		else if ((*action = action_resolve (v->value.string.str)) >= 0)
+			return true;
+		else
+			print_error ("%s: unknown action: %s",
+				iter->link->key, v->value.string.str);
+	}
+	return false;
 }
 
 static void
-app_init_bindings (struct binding *bindings, size_t len)
+app_init_bindings (const char *keymap,
+	struct binding_default *defaults, size_t defaults_len,
+	struct binding **result, size_t *result_len)
 {
-	for (size_t i = 0; i < len; i++)
+	ARRAY (struct binding, a)
+	ARRAY_INIT_SIZED (a, defaults_len);
+
+	termo_key_t decoded;
+	for (size_t i = 0; i < defaults_len; i++)
+	{
 		hard_assert (!*termo_strpkey_utf8 (g.tk,
-			bindings[i].key, &bindings[i].decoded, TERMO_FORMAT_ALTISMETA));
-	qsort (bindings, len, sizeof *bindings, app_binding_cmp);
+			defaults[i].key, &decoded, TERMO_FORMAT_ALTISMETA));
+		a[a_len++] = (struct binding) { decoded, defaults[i].action, a_len };
+	}
+
+	struct config_item *root = config_item_get (g.config.root, keymap, NULL);
+	if (root && root->type == CONFIG_ITEM_OBJECT)
+	{
+		struct str_map_iter iter = str_map_iter_make (&root->value.object);
+		ARRAY_RESERVE (a, iter.map->len);
+
+		int action;
+		while (app_next_binding (&iter, &decoded, &action))
+			a[a_len++] = (struct binding) { decoded, action, a_len };
+	}
+
+	// Use the helper field to use the last mappings of identical bindings
+	size_t out = 0;
+	qsort (a, a_len, sizeof *a, app_binding_cmp);
+	for (size_t in = 0; in < a_len; in++)
+	{
+		a[in].order = 0;
+		if (!out || termo_keycmp (g.tk, &a[in].decoded, &a[out - 1].decoded))
+			a[out++] = a[in];
+	}
+
+	*result = a;
+	*result_len = out;
 }
 
 static bool
 app_process_termo_event (termo_key_t *event)
 {
-	struct binding dummy = { NULL, 0, *event }, *binding;
+	struct binding dummy = { *event, 0, 0 }, *binding;
 	if (g.editor_line)
 	{
 		if ((binding = bsearch (&dummy, g_editor_bindings,
-			N_ELEMENTS (g_editor_bindings), sizeof *binding, app_binding_cmp)))
+			g_editor_bindings_len, sizeof *binding, app_binding_cmp)))
 			return app_editor_process_action (binding->action);
 		if (event->type != TERMO_TYPE_KEY || event->modifiers != 0)
 			return false;
@@ -2181,8 +2262,8 @@ app_process_termo_event (termo_key_t *event)
 		app_invalidate ();
 		return true;
 	}
-	if ((binding = bsearch (&dummy, g_default_bindings,
-		N_ELEMENTS (g_default_bindings), sizeof *binding, app_binding_cmp)))
+	if ((binding = bsearch (&dummy, g_normal_bindings,
+		g_normal_bindings_len, sizeof *binding, app_binding_cmp)))
 		return app_process_action (binding->action);
 
 	// TODO: parametrize actions, put this among other bindings
@@ -2956,10 +3037,23 @@ help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 	(void) width;
 
 	// TODO: group them the other way around for clarity
-	hard_assert (item_index < N_ELEMENTS (g_default_bindings));
-	struct binding *binding = &g_default_bindings[item_index];
+	//   - go through 0..ACTION_COUNT
+	//   - ...
+
+	hard_assert (item_index < g_normal_bindings_len);
+	struct binding *binding = &g_normal_bindings[item_index];
+
+	// For display purposes, this is highly desirable
+	int flags = termo_get_flags (g.tk);
+	termo_set_flags (g.tk, flags | TERMO_FLAG_SPACESYMBOL);
+	termo_key_t key = binding->decoded;
+	termo_canonicalise (g.tk, &key);
+	termo_set_flags (g.tk, flags);
+
+	char buf[16];
+	termo_strfkey_utf8 (g.tk, buf, sizeof buf, &key, TERMO_FORMAT_ALTISMETA);
 	char *text = xstrdup_printf ("%-12s %s",
-		binding->key, g_actions[binding->action].description);
+		buf, g_actions[binding->action].description);
 	row_buffer_append (buffer, text, 0);
 	free (text);
 }
@@ -2970,7 +3064,7 @@ help_tab_init (void)
 	static struct tab super;
 	tab_init (&super, "Help");
 	super.on_item_draw = help_tab_on_item_draw;
-	super.item_count = N_ELEMENTS (g_default_bindings);
+	super.item_count = g_normal_bindings_len;
 	return &super;
 }
 
@@ -3633,8 +3727,12 @@ main (int argc, char *argv[])
 	signals_setup_handlers ();
 	app_init_poller_events ();
 
-	app_init_bindings (g_default_bindings, N_ELEMENTS (g_default_bindings));
-	app_init_bindings (g_editor_bindings,  N_ELEMENTS (g_editor_bindings));
+	app_init_bindings ("normal",
+		g_normal_defaults, N_ELEMENTS (g_normal_defaults),
+		&g_normal_bindings, &g_normal_bindings_len);
+	app_init_bindings ("editor",
+		g_editor_defaults, N_ELEMENTS (g_editor_defaults),
+		&g_editor_bindings, &g_editor_bindings_len);
 
 	if (g_debug_mode)
 		app_prepend_tab (debug_tab_init ());
