@@ -1685,12 +1685,16 @@ app_editor_process_action (enum action action)
 	case ACTION_EDITOR_B_CHAR:
 		if (g.editor_point < 1)
 			return false;
-		g.editor_point--;
+		do g.editor_point--;
+		while (g.editor_point > 0
+			&& !g.editor_w[g.editor_point]);
 		return true;
 	case ACTION_EDITOR_F_CHAR:
 		if (g.editor_point + 1 > (int) g.editor_len)
 			return false;
-		g.editor_point++;
+		do g.editor_point++;
+		while (g.editor_point < (int) g.editor_len
+			&& !g.editor_w[g.editor_point]);
 		return true;
 	case ACTION_EDITOR_B_WORD:
 	{
