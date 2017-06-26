@@ -1555,6 +1555,7 @@ app_goto_tab (int tab_index)
 	\
 	XX( MPD_ADD,         "Add song to playlist"       ) \
 	XX( MPD_REPLACE,     "Replace playlist with song" ) \
+	XX( MPD_COMMAND,     "Send a raw command to MPD"  ) \
 	\
 	XX( CHOOSE,             "Choose item"             ) \
 	XX( DELETE,             "Delete item"             ) \
@@ -1844,6 +1845,22 @@ app_setvol (int value)
 	return result;
 }
 
+static void
+app_on_editor_end (bool confirmed)
+{
+	struct mpd_client *c = &g.client;
+	if (!confirmed)
+		return;
+
+	size_t len;
+	char *u8 = (char *) u32_to_u8 (g.editor_line, g.editor_len + 1, NULL, &len);
+	mpd_client_send_command_raw (c, u8);
+	free (u8);
+
+	mpd_client_add_task (c, mpd_on_simple_response, NULL);
+	mpd_client_idle (c, 0);
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
@@ -1864,6 +1881,10 @@ app_process_action (enum action action)
 	case ACTION_REDRAW:
 		clear ();
 		app_invalidate ();
+		return true;
+	case ACTION_MPD_COMMAND:
+		app_editor_start (':');
+		g.on_editor_end = app_on_editor_end;
 		return true;
 	default:
 		return false;
@@ -2071,6 +2092,7 @@ g_default_bindings[] =
 	{ "Backspace",  ACTION_UP,                 {}},
 	{ "a",          ACTION_MPD_ADD,            {}},
 	{ "r",          ACTION_MPD_REPLACE,        {}},
+	{ ":",          ACTION_MPD_COMMAND,        {}},
 
 	{ "Left",       ACTION_MPD_PREVIOUS,       {}},
 	{ "Right",      ACTION_MPD_NEXT,           {}},
