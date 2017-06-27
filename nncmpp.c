@@ -3032,8 +3032,8 @@ info_tab_init (void)
 
 static struct strv g_help_tab_lines;
 
-static size_t
-help_tab_strfkey (const termo_key_t *key, char *buf, size_t len)
+static void
+help_tab_strfkey (const termo_key_t *key, struct strv *out)
 {
 	// For display purposes, this is highly desirable
 	int flags = termo_get_flags (g.tk);
@@ -3041,23 +3041,21 @@ help_tab_strfkey (const termo_key_t *key, char *buf, size_t len)
 	termo_key_t fixed = *key;
 	termo_canonicalise (g.tk, &fixed);
 	termo_set_flags (g.tk, flags);
-	return termo_strfkey_utf8 (g.tk, buf, len, &fixed, TERMO_FORMAT_ALTISMETA);
+
+	char buf[16];
+	termo_strfkey_utf8 (g.tk, buf, sizeof buf, &fixed, TERMO_FORMAT_ALTISMETA);
+	strv_append (out, buf);
 }
 
 static void
 help_tab_group (struct binding *keys, size_t len, struct strv *out)
 {
-	char buf[16];
 	for (enum action i = 0; i < ACTION_COUNT; i++)
 	{
 		struct strv ass = strv_make ();
 		for (size_t k = 0; k < len; k++)
-		{
-			if (keys[k].action != i)
-				continue;
-			help_tab_strfkey (&keys[k].decoded, buf, sizeof buf);
-			strv_append (&ass, buf);
-		}
+			if (keys[k].action == i)
+				help_tab_strfkey (&keys[k].decoded, &ass);
 		if (ass.len)
 		{
 			char *joined = strv_join (&ass, ", ");
