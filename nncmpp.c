@@ -1536,61 +1536,61 @@ app_goto_tab (int tab_index)
 // --- Actions -----------------------------------------------------------------
 
 #define ACTIONS(XX) \
-	XX( NONE,               "Do nothing"              ) \
+	XX( NONE,               "Do nothing"                  ) \
 	\
-	XX( QUIT,               "Quit application"        ) \
-	XX( REDRAW,             "Redraw screen"           ) \
-	XX( HELP_TAB,           "Switch to the help tab"  ) \
-	XX( LAST_TAB,           "Switch to previous tab"  ) \
+	XX( QUIT,               "Quit"                        ) \
+	XX( REDRAW,             "Redraw screen"               ) \
+	XX( HELP_TAB,           "Switch to help tab"          ) \
+	XX( LAST_TAB,           "Switch to previous tab"      ) \
 	\
-	XX( MPD_TOGGLE,         "Toggle play/pause"       ) \
-	XX( MPD_STOP,           "Stop playback"           ) \
-	XX( MPD_PREVIOUS,       "Previous song"           ) \
-	XX( MPD_NEXT,           "Next song"               ) \
-	XX( MPD_BACKWARD,       "Seek backwards"          ) \
-	XX( MPD_FORWARD,        "Seek forwards"           ) \
-	XX( MPD_UPDATE_DB,      "Update MPD database"     ) \
-	XX( MPD_VOLUME_UP,      "Increase volume"         ) \
-	XX( MPD_VOLUME_DOWN,    "Decrease volume"         ) \
+	XX( MPD_TOGGLE,         "Toggle play/pause"           ) \
+	XX( MPD_STOP,           "Stop playback"               ) \
+	XX( MPD_PREVIOUS,       "Previous song"               ) \
+	XX( MPD_NEXT,           "Next song"                   ) \
+	XX( MPD_BACKWARD,       "Seek backwards"              ) \
+	XX( MPD_FORWARD,        "Seek forwards"               ) \
+	XX( MPD_VOLUME_UP,      "Increase volume"             ) \
+	XX( MPD_VOLUME_DOWN,    "Decrease volume"             ) \
 	\
-	XX( MPD_ADD,         "Add song to playlist"       ) \
-	XX( MPD_REPLACE,     "Replace playlist with song" ) \
-	XX( MPD_COMMAND,     "Send a raw command to MPD"  ) \
+	XX( MPD_ADD,            "Add selection to playlist"   ) \
+	XX( MPD_REPLACE,        "Replace playlist"            ) \
+	XX( MPD_UPDATE_DB,      "Update MPD database"         ) \
+	XX( MPD_COMMAND,        "Send raw command to MPD"     ) \
 	\
-	XX( CHOOSE,             "Choose item"             ) \
-	XX( DELETE,             "Delete item"             ) \
-	XX( UP,                 "Go up a level"           ) \
+	XX( CHOOSE,             "Choose item"                 ) \
+	XX( DELETE,             "Delete item"                 ) \
+	XX( UP,                 "Go up a level"               ) \
 	\
-	XX( SCROLL_UP,          "Scroll up"               ) \
-	XX( SCROLL_DOWN,        "Scroll down"             ) \
-	XX( MOVE_UP,            "Move selection up"       ) \
-	XX( MOVE_DOWN,          "Move selection down"     ) \
+	XX( SCROLL_UP,          "Scroll up"                   ) \
+	XX( SCROLL_DOWN,        "Scroll down"                 ) \
+	XX( MOVE_UP,            "Move selection up"           ) \
+	XX( MOVE_DOWN,          "Move selection down"         ) \
 	\
-	XX( GOTO_TOP,           "Go to the top"           ) \
-	XX( GOTO_BOTTOM,        "Go to the bottom"        ) \
-	XX( GOTO_ITEM_PREVIOUS, "Go to the previous item" ) \
-	XX( GOTO_ITEM_NEXT,     "Go to the next item"     ) \
-	XX( GOTO_PAGE_PREVIOUS, "Go to the previous page" ) \
-	XX( GOTO_PAGE_NEXT,     "Go to the next page"     ) \
+	XX( GOTO_TOP,           "Go to top"                   ) \
+	XX( GOTO_BOTTOM,        "Go to bottom"                ) \
+	XX( GOTO_ITEM_PREVIOUS, "Go to previous item"         ) \
+	XX( GOTO_ITEM_NEXT,     "Go to next item"             ) \
+	XX( GOTO_PAGE_PREVIOUS, "Go to previous page"         ) \
+	XX( GOTO_PAGE_NEXT,     "Go to next page"             ) \
 	\
-	XX( GOTO_VIEW_TOP,      "Select the top item"     ) \
-	XX( GOTO_VIEW_CENTER,   "Select the center item"  ) \
-	XX( GOTO_VIEW_BOTTOM,   "Select the bottom item"  ) \
+	XX( GOTO_VIEW_TOP,      "Select top item"             ) \
+	XX( GOTO_VIEW_CENTER,   "Select center item"          ) \
+	XX( GOTO_VIEW_BOTTOM,   "Select bottom item"          ) \
 	\
-	XX( EDITOR_B_CHAR,      "Go back a character"     ) \
-	XX( EDITOR_F_CHAR,      "Go forward a character"  ) \
-	XX( EDITOR_B_WORD,      "Go back a word"          ) \
-	XX( EDITOR_F_WORD,      "Go forward a word"       ) \
-	XX( EDITOR_HOME,        "Go to start of line"     ) \
-	XX( EDITOR_END,         "Go to end of line"       ) \
+	XX( EDITOR_CONFIRM,     "Confirm input"               ) \
 	\
-	XX( EDITOR_B_DELETE,    "Delete last character"   ) \
-	XX( EDITOR_F_DELETE,    "Delete next character"   ) \
-	XX( EDITOR_B_KILL_WORD, "Delete last word"        ) \
-	XX( EDITOR_B_KILL_LINE, "Delete all up to BOL"    ) \
-	XX( EDITOR_F_KILL_LINE, "Delete all up to EOL"    ) \
+	XX( EDITOR_B_CHAR,      "Go back a character"         ) \
+	XX( EDITOR_F_CHAR,      "Go forward a character"      ) \
+	XX( EDITOR_B_WORD,      "Go back a word"              ) \
+	XX( EDITOR_F_WORD,      "Go forward a word"           ) \
+	XX( EDITOR_HOME,        "Go to start of line"         ) \
+	XX( EDITOR_END,         "Go to end of line"           ) \
 	\
-	XX( EDITOR_CONFIRM,     "Confirm editor input"    )
+	XX( EDITOR_B_DELETE,    "Delete last character"       ) \
+	XX( EDITOR_F_DELETE,    "Delete next character"       ) \
+	XX( EDITOR_B_KILL_WORD, "Delete last word"            ) \
+	XX( EDITOR_B_KILL_LINE, "Delete everything up to BOL" ) \
+	XX( EDITOR_F_KILL_LINE, "Delete everything up to EOL" )
 
 enum action
 {
