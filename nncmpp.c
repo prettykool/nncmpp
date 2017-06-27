@@ -3030,40 +3030,72 @@ info_tab_init (void)
 
 // --- Help tab ----------------------------------------------------------------
 
+static struct strv g_help_tab_lines;
+
+static size_t
+help_tab_strfkey (const termo_key_t *key, char *buf, size_t len)
+{
+	// For display purposes, this is highly desirable
+	int flags = termo_get_flags (g.tk);
+	termo_set_flags (g.tk, flags | TERMO_FLAG_SPACESYMBOL);
+	termo_key_t fixed = *key;
+	termo_canonicalise (g.tk, &fixed);
+	termo_set_flags (g.tk, flags);
+	return termo_strfkey_utf8 (g.tk, buf, len, &fixed, TERMO_FORMAT_ALTISMETA);
+}
+
+static void
+help_tab_group (struct binding *keys, size_t len, struct strv *out)
+{
+	char buf[16];
+	for (enum action i = 0; i < ACTION_COUNT; i++)
+	{
+		struct strv ass = strv_make ();
+		for (size_t k = 0; k < len; k++)
+		{
+			if (keys[k].action != i)
+				continue;
+			help_tab_strfkey (&keys[k].decoded, buf, sizeof buf);
+			strv_append (&ass, buf);
+		}
+		if (ass.len)
+		{
+			char *joined = strv_join (&ass, ", ");
+			strv_append_owned (out, xstrdup_printf
+				("  %-30s %s", g_actions[i].description, joined));
+			free (joined);
+		}
+		strv_free (&ass);
+	}
+}
+
 static void
 help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 {
 	(void) width;
 
-	// TODO: group them the other way around for clarity
-	//   - go through 0..ACTION_COUNT
-	//   - ...
-
-	hard_assert (item_index < g_normal_keys_len);
-	struct binding *binding = &g_normal_keys[item_index];
-
-	// For display purposes, this is highly desirable
-	int flags = termo_get_flags (g.tk);
-	termo_set_flags (g.tk, flags | TERMO_FLAG_SPACESYMBOL);
-	termo_key_t key = binding->decoded;
-	termo_canonicalise (g.tk, &key);
-	termo_set_flags (g.tk, flags);
-
-	char buf[16];
-	termo_strfkey_utf8 (g.tk, buf, sizeof buf, &key, TERMO_FORMAT_ALTISMETA);
-	char *text = xstrdup_printf ("%-12s %s",
-		buf, g_actions[binding->action].description);
-	row_buffer_append (buffer, text, 0);
-	free (text);
+	hard_assert (item_index < g_help_tab_lines.len);
+	const char *line = g_help_tab_lines.vector[item_index];
+	row_buffer_append (buffer, line, *line == ' ' ? 0 : A_BOLD);
 }
 
 static struct tab *
 help_tab_init (void)
 {
+	g_help_tab_lines = strv_make ();
+
+	strv_append (&g_help_tab_lines, "Normal mode actions");
+	help_tab_group (g_normal_keys, g_normal_keys_len, &g_help_tab_lines);
+	strv_append (&g_help_tab_lines, "");
+
+	strv_append (&g_help_tab_lines, "Editor mode actions");
+	help_tab_group (g_editor_keys, g_editor_keys_len, &g_help_tab_lines);
+	strv_append (&g_help_tab_lines, "");
+
 	static struct tab super;
 	tab_init (&super, "Help");
 	super.on_item_draw = help_tab_on_item_draw;
-	super.item_count = g_normal_keys_len;
+	super.item_count = g_help_tab_lines.len;
 	return &super;
 }
 
