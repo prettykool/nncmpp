@@ -1,6 +1,6 @@
 [submodule "termo"]
 	path = termo
-	url = git://github.com/pjanouch/termo.git
+	url = https://git.janouch.name/p/termo.git
 [submodule "liberty"]
 	path = liberty
-	url = git://github.com/pjanouch/liberty.git
+	url = https://git.janouch.name/p/liberty.git
