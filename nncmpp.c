@@ -2211,12 +2211,15 @@ app_init_bindings (const char *keymap,
 	ARRAY (struct binding, a)
 	ARRAY_INIT_SIZED (a, defaults_len);
 
+	// Order for stable sorting
+	size_t order = 0;
+
 	termo_key_t decoded;
 	for (size_t i = 0; i < defaults_len; i++)
 	{
 		hard_assert (!*termo_strpkey_utf8 (g.tk,
 			defaults[i].key, &decoded, TERMO_FORMAT_ALTISMETA));
-		a[a_len++] = (struct binding) { decoded, defaults[i].action, a_len };
+		a[a_len++] = (struct binding) { decoded, defaults[i].action, order++ };
 	}
 
 	struct config_item *root = config_item_get (g.config.root, keymap, NULL);
@@ -2227,7 +2230,7 @@ app_init_bindings (const char *keymap,
 
 		int action;
 		while (app_next_binding (&iter, &decoded, &action))
-			a[a_len++] = (struct binding) { decoded, action, a_len };
+			a[a_len++] = (struct binding) { decoded, action, order++ };
 	}
 
 	// Use the helper field to use the last mappings of identical bindings
