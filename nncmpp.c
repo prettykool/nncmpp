@@ -2134,6 +2134,8 @@ g_normal_defaults[] =
 	{ "r",          ACTION_MPD_REPLACE        },
 	{ ":",          ACTION_MPD_COMMAND        },
 
+	{ "<",          ACTION_MPD_PREVIOUS       },
+	{ ">",          ACTION_MPD_NEXT           },
 	{ "Left",       ACTION_MPD_PREVIOUS       },
 	{ "Right",      ACTION_MPD_NEXT           },
 	{ "M-Left",     ACTION_MPD_BACKWARD       },
