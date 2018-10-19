@@ -1,7 +1,7 @@
 /*
  * nncmpp -- the MPD client you never knew you needed
  *
- * Copyright (c) 2016 - 2017, Přemysl Janouch <p@janouch.name>
+ * Copyright (c) 2016 - 2018, Přemysl Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -66,6 +66,7 @@ enum
 #include "liberty/liberty.c"
 #include "liberty/liberty-tui.c"
 
+#include <math.h>
 #include <locale.h>
 #include <termios.h>
 #ifndef TIOCGWINSZ
@@ -1171,6 +1172,29 @@ app_visible_items (void)
 	return MAX (0, app_fitting_items ());
 }
 
+struct scrollbar { long length, start; }
+app_compute_scrollbar (long top, long total, long visible)
+{
+	if (total < visible)
+		return (struct scrollbar) { 0, 0 };
+	if (visible == 1)
+		return (struct scrollbar) { 1, 0 };
+	if (visible == 2)
+		return (struct scrollbar) { 1, top >= total / 2 };
+
+	// Only be at the top or bottom when the top or bottom item can be seen.
+	// The algorithm isn't optimal but it's a bitch to get right.
+	double lenf = 1. + (visible - 2.) * visible / total, length = 0.;
+	long offset = 1. + (visible - 2.) * top / total + modf (lenf, &length);
+
+	if (top == 0)
+		return (struct scrollbar) { length, 0 };
+	if (top + visible >= total)
+		return (struct scrollbar) { length, visible - length };
+
+	return (struct scrollbar) { length, offset };
+}
+
 static void
 app_draw_scrollbar (void)
 {
@@ -1183,18 +1207,15 @@ app_draw_scrollbar (void)
 	struct tab *tab = g.active_tab;
 	int visible_items = app_visible_items ();
 
+	hard_assert (tab->item_count != 0);
 	if (!g.use_partial_boxes)
 	{
-		// Apparently here we don't want the 0.5 rounding constant
-		int length = (float) visible_items / (int) tab->item_count
-			* (visible_items - 1);
-		int start  = (float) tab->item_top / (int) tab->item_count
-			* (visible_items - 1);
-
+		struct scrollbar bar = app_compute_scrollbar
+			(tab->item_top, tab->item_count, visible_items);
 		for (int row = 0; row < visible_items; row++)
 		{
 			move (g.header_height + row, COLS - 1);
-			if (row < start || row > start + length + 1)
+			if (row < bar.start || row >= bar.start + bar.length)
 				addch (' ' | APP_ATTR (SCROLLBAR));
 			else
 				addch (' ' | APP_ATTR (SCROLLBAR) | A_REVERSE);
