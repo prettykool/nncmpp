@@ -66,6 +66,9 @@ enum
 #include "liberty/liberty.c"
 #include "liberty/liberty-tui.c"
 
+#define HAVE_LIBERTY
+#include "line-editor.c"
+
 #include <math.h>
 #include <locale.h>
 #include <termios.h>
@@ -630,18 +633,8 @@ static struct app_context
 	int gauge_offset;                   ///< Offset to the gauge or -1
 	int gauge_width;                    ///< Width of the gauge, if present
 
+	struct line_editor editor;          ///< Line editor
 	struct poller_idle refresh_event;   ///< Refresh the screen
-
-	// Line editor:
-
-	int editor_point;                   ///< Caret index into line data
-	ucs4_t *editor_line;                ///< Line data, 0-terminated
-	int *editor_w;                      ///< Codepoint widths, 0-terminated
-	size_t editor_len;                  ///< Editor length
-	size_t editor_alloc;                ///< Editor allocated
-	char editor_prompt;                 ///< Prompt character
-	void (*on_editor_changed) (void);   ///< Callback on text change
-	void (*on_editor_end) (bool);       ///< Callback on abort
 
 	// Terminal:
 
@@ -886,8 +879,7 @@ app_free_context (void)
 	strv_free (&g.streams);
 	item_list_free (&g.playlist);
 
-	free (g.editor_line);
-	free (g.editor_w);
+	line_editor_free (&g.editor);
 
 	config_free (&g.config);
 	poller_free (&g.poller);
@@ -1362,53 +1354,6 @@ app_write_mpd_status (struct row_buffer *buf)
 }
 
 static void
-row_buffer_append_c (struct row_buffer *self, ucs4_t c, chtype attrs)
-{
-	struct row_char current = { .attrs = attrs, .c = c };
-	struct row_char invalid = { .attrs = attrs, .c = '?', .width = 1 };
-
-	current.width = uc_width (current.c, locale_charset ());
-	if (current.width < 0 || !app_is_character_in_locale (current.c))
-		current = invalid;
-
-	ARRAY_RESERVE (self->chars, 1);
-	self->chars[self->chars_len++] = current;
-	self->total_width += current.width;
-}
-
-static int
-app_write_editor (struct row_buffer *row)
-{
-	int limit = COLS;
-	if (g.editor_prompt)
-	{
-		hard_assert (g.editor_prompt < 127);
-		row_buffer_append_c (row, g.editor_prompt, APP_ATTR (HIGHLIGHT));
-		limit--;
-	}
-
-	int following = 0;
-	for (size_t i = g.editor_point; i < g.editor_len; i++)
-		following += g.editor_w[i];
-
-	int preceding = 0;
-	size_t start = g.editor_point;
-	while (start && preceding < limit / 2)
-		preceding += g.editor_w[--start];
-
-	// There can be one extra space at the end of the line but this way we
-	// don't need to care about non-spacing marks following full-width chars
-	while (start && limit - preceding - following > 2 /* widest char */)
-		preceding += g.editor_w[--start];
-
-	// XXX: we should also show < > indicators for overflow but it'd probably
-	//   considerably complicate this algorithm
-	for (; start < g.editor_len; start++)
-		row_buffer_append_c (row, g.editor_line[start], APP_ATTR (HIGHLIGHT));
-	return !!g.editor_prompt + preceding;
-}
-
-static void
 app_draw_statusbar (void)
 {
 	int caret = -1;
@@ -1416,8 +1361,8 @@ app_draw_statusbar (void)
 	struct row_buffer buf = row_buffer_make ();
 	if (g.message)
 		row_buffer_append (&buf, g.message, APP_ATTR (HIGHLIGHT));
-	else if (g.editor_line)
-		caret = app_write_editor (&buf);
+	else if (g.editor.line)
+		caret = line_editor_write (&g.editor, &buf, COLS, APP_ATTR (HIGHLIGHT));
 	else if (g.client.state == MPD_CONNECTED)
 		app_write_mpd_status (&buf);
 
@@ -1645,199 +1590,6 @@ action_resolve (const char *name)
 	return -1;
 }
 
-// --- Line editor -------------------------------------------------------------
-
-// TODO: move the editor out as a component to liberty-tui.c
-
-/// Notify whomever invoked the editor that it's been either confirmed or
-/// cancelled and clean up editor state
-static void
-app_editor_abort (bool status)
-{
-	g.on_editor_end (status);
-	g.on_editor_changed = NULL;
-	g.on_editor_end = NULL;
-
-	free (g.editor_line);
-	g.editor_line = NULL;
-	free (g.editor_w);
-	g.editor_w = NULL;
-	g.editor_alloc = 0;
-	g.editor_len = 0;
-	g.editor_point = 0;
-	g.editor_prompt = 0;
-}
-
-/// Start the line editor; remember to fill in "change" and "abort" callbacks
-static void
-app_editor_start (char prompt)
-{
-	g.editor_alloc = 16;
-	g.editor_line = xcalloc (sizeof *g.editor_line, g.editor_alloc);
-	g.editor_w = xcalloc (sizeof *g.editor_w, g.editor_alloc);
-	g.editor_len = 0;
-	g.editor_point = 0;
-	g.editor_prompt = prompt;
-	app_invalidate ();
-}
-
-static void
-app_editor_changed (void)
-{
-	g.editor_line[g.editor_len] = 0;
-	g.editor_w[g.editor_len] = 0;
-
-	if (g.on_editor_changed)
-		g.on_editor_changed ();
-}
-
-static void
-app_editor_move (int to, int from, int len)
-{
-	memmove (g.editor_line + to, g.editor_line + from,
-		sizeof *g.editor_line * len);
-	memmove (g.editor_w + to, g.editor_w + from,
-		sizeof *g.editor_w * len);
-}
-
-static bool
-app_editor_process_action (enum action action)
-{
-	app_invalidate ();
-	switch (action)
-	{
-	case ACTION_QUIT:
-		app_editor_abort (false);
-		return true;
-	case ACTION_EDITOR_CONFIRM:
-		app_editor_abort (true);
-		return true;
-	default:
-		return false;
-
-	case ACTION_EDITOR_B_CHAR:
-		if (g.editor_point < 1)
-			return false;
-		do g.editor_point--;
-		while (g.editor_point > 0
-			&& !g.editor_w[g.editor_point]);
-		return true;
-	case ACTION_EDITOR_F_CHAR:
-		if (g.editor_point + 1 > (int) g.editor_len)
-			return false;
-		do g.editor_point++;
-		while (g.editor_point < (int) g.editor_len
-			&& !g.editor_w[g.editor_point]);
-		return true;
-	case ACTION_EDITOR_B_WORD:
-	{
-		if (g.editor_point < 1)
-			return false;
-		int i = g.editor_point;
-		while (i && g.editor_line[--i] == ' ');
-		while (i-- && g.editor_line[i] != ' ');
-		g.editor_point = ++i;
-		return true;
-	}
-	case ACTION_EDITOR_F_WORD:
-	{
-		if (g.editor_point + 1 > (int) g.editor_len)
-			return false;
-		int i = g.editor_point;
-		while (i < (int) g.editor_len && g.editor_line[i] != ' ') i++;
-		while (i < (int) g.editor_len && g.editor_line[i] == ' ') i++;
-		g.editor_point = i;
-		return true;
-	}
-	case ACTION_EDITOR_HOME:
-		g.editor_point = 0;
-		return true;
-	case ACTION_EDITOR_END:
-		g.editor_point = g.editor_len;
-		return true;
-
-	case ACTION_EDITOR_B_DELETE:
-	{
-		if (g.editor_point < 1)
-			return false;
-		int len = 1;
-		while (g.editor_point - len > 0
-			&& !g.editor_w[g.editor_point - len])
-			len++;
-		app_editor_move (g.editor_point - len, g.editor_point,
-			g.editor_len - g.editor_point);
-		g.editor_len -= len;
-		g.editor_point -= len;
-		app_editor_changed ();
-		return true;
-	}
-	case ACTION_EDITOR_F_DELETE:
-	{
-		if (g.editor_point + 1 > (int) g.editor_len)
-			return false;
-		int len = 1;
-		while (g.editor_point + len < (int) g.editor_len
-			&& !g.editor_w[g.editor_point + len])
-			len++;
-		g.editor_len -= len;
-		app_editor_move (g.editor_point, g.editor_point + len,
-			g.editor_len - g.editor_point);
-		app_editor_changed ();
-		return true;
-	}
-	case ACTION_EDITOR_B_KILL_WORD:
-	{
-		if (g.editor_point < 1)
-			return false;
-
-		int i = g.editor_point;
-		while (i && g.editor_line[--i] == ' ');
-		while (i-- && g.editor_line[i] != ' ');
-		i++;
-
-		app_editor_move (i, g.editor_point, (g.editor_len - g.editor_point));
-		g.editor_len -= g.editor_point - i;
-		g.editor_point = i;
-		app_editor_changed ();
-		return true;
-	}
-	case ACTION_EDITOR_B_KILL_LINE:
-		g.editor_len -= g.editor_point;
-		app_editor_move (0, g.editor_point, g.editor_len);
-		g.editor_point = 0;
-		app_editor_changed ();
-		return true;
-	case ACTION_EDITOR_F_KILL_LINE:
-		g.editor_len = g.editor_point;
-		app_editor_changed ();
-		return true;
-	}
-}
-
-static void
-app_editor_insert (ucs4_t codepoint)
-{
-	while (g.editor_alloc - g.editor_len < 2 /* inserted + sentinel */)
-	{
-		g.editor_alloc <<= 1;
-		g.editor_line = xreallocarray
-			(g.editor_line, sizeof *g.editor_line, g.editor_alloc);
-		g.editor_w = xreallocarray
-			(g.editor_w, sizeof *g.editor_w, g.editor_alloc);
-	}
-
-	app_editor_move (g.editor_point + 1, g.editor_point,
-		g.editor_len - g.editor_point);
-	g.editor_line[g.editor_point] = codepoint;
-	g.editor_w[g.editor_point] = app_is_character_in_locale (codepoint)
-		? uc_width (codepoint, locale_charset ())
-		: 1 /* the replacement question mark */;
-
-	g.editor_point++;
-	g.editor_len++;
-	app_editor_changed ();
-}
-
 // --- User input handling -----------------------------------------------------
 
 static void
@@ -1902,7 +1654,7 @@ app_on_editor_end (bool confirmed)
 		return;
 
 	size_t len;
-	char *u8 = (char *) u32_to_u8 (g.editor_line, g.editor_len + 1, NULL, &len);
+	char *u8 = (char *) u32_to_u8 (g.editor.line, g.editor.len + 1, NULL, &len);
 	mpd_client_send_command_raw (c, u8);
 	free (u8);
 
@@ -1932,8 +1684,9 @@ app_process_action (enum action action)
 		app_invalidate ();
 		return true;
 	case ACTION_MPD_COMMAND:
-		app_editor_start (':');
-		g.on_editor_end = app_on_editor_end;
+		line_editor_start (&g.editor, ':');
+		g.editor.on_end = app_on_editor_end;
+		app_invalidate ();
 		return true;
 	default:
 		return false;
@@ -2004,6 +1757,49 @@ app_process_action (enum action action)
 		return app_move_selection (MAX (0, app_visible_items () - 1));
 	}
 	return false;
+}
+
+static bool
+app_editor_process_action (enum action action)
+{
+	app_invalidate ();
+	switch (action)
+	{
+	case ACTION_QUIT:
+		line_editor_abort (&g.editor, false);
+		g.editor.on_end = NULL;
+		return true;
+	case ACTION_EDITOR_CONFIRM:
+		line_editor_abort (&g.editor, true);
+		g.editor.on_end = NULL;
+		return true;
+	default:
+		return false;
+
+	case ACTION_EDITOR_B_CHAR:
+		return line_editor_action (&g.editor, LINE_EDITOR_B_CHAR);
+	case ACTION_EDITOR_F_CHAR:
+		return line_editor_action (&g.editor, LINE_EDITOR_F_CHAR);
+	case ACTION_EDITOR_B_WORD:
+		return line_editor_action (&g.editor, LINE_EDITOR_B_WORD);
+	case ACTION_EDITOR_F_WORD:
+		return line_editor_action (&g.editor, LINE_EDITOR_F_WORD);
+	case ACTION_EDITOR_HOME:
+		return line_editor_action (&g.editor, LINE_EDITOR_HOME);
+	case ACTION_EDITOR_END:
+		return line_editor_action (&g.editor, LINE_EDITOR_END);
+
+	case ACTION_EDITOR_B_DELETE:
+		return line_editor_action (&g.editor, LINE_EDITOR_B_DELETE);
+	case ACTION_EDITOR_F_DELETE:
+		return line_editor_action (&g.editor, LINE_EDITOR_F_DELETE);
+	case ACTION_EDITOR_B_KILL_WORD:
+		return line_editor_action (&g.editor, LINE_EDITOR_B_KILL_WORD);
+	case ACTION_EDITOR_B_KILL_LINE:
+		return line_editor_action (&g.editor, LINE_EDITOR_B_KILL_LINE);
+	case ACTION_EDITOR_F_KILL_LINE:
+		return line_editor_action (&g.editor, LINE_EDITOR_F_KILL_LINE);
+	}
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2086,8 +1882,8 @@ app_process_mouse (termo_mouse_event_t type, int line, int column, int button,
 	if (type != TERMO_MOUSE_PRESS)
 		return true;
 
-	if (g.editor_line)
-		app_editor_abort (false);
+	if (g.editor.line)
+		line_editor_abort (&g.editor, false);
 
 	if (button == 1)
 		return app_process_left_mouse_click (line, column, double_click);
@@ -2270,7 +2066,7 @@ static bool
 app_process_termo_event (termo_key_t *event)
 {
 	struct binding dummy = { *event, 0, 0 }, *binding;
-	if (g.editor_line)
+	if (g.editor.line)
 	{
 		if ((binding = bsearch (&dummy, g_editor_keys, g_editor_keys_len,
 			sizeof *binding, app_binding_cmp)))
@@ -2278,7 +2074,7 @@ app_process_termo_event (termo_key_t *event)
 		if (event->type != TERMO_TYPE_KEY || event->modifiers != 0)
 			return false;
 
-		app_editor_insert (event->code.codepoint);
+		line_editor_insert (&g.editor, event->code.codepoint);
 		app_invalidate ();
 		return true;
 	}
@@ -3630,7 +3426,7 @@ app_on_key_timer (void *user_data)
 	termo_key_t event;
 	if (termo_getkey_force (g.tk, &event) == TERMO_RES_KEY)
 		if (!app_process_termo_event (&event))
-			app_quit ();
+			app_quit ();  // presumably an ESC, questionable
 }
 
 static void
