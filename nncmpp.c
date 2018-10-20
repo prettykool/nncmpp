@@ -3428,7 +3428,7 @@ app_on_key_timer (void *user_data)
 	termo_key_t event;
 	if (termo_getkey_force (g.tk, &event) == TERMO_RES_KEY)
 		if (!app_process_termo_event (&event))
-			app_quit ();  // presumably an ESC, questionable
+			beep ();
 }
 
 static void
