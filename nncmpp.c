@@ -1172,25 +1172,30 @@ app_visible_items (void)
 	return MAX (0, app_fitting_items ());
 }
 
+/// Figure out scrollbar appearance.  @a s is the minimal slider length as well
+/// as the scrollbar resolution per @a visible item.
 struct scrollbar { long length, start; }
-app_compute_scrollbar (long top, long total, long visible)
+app_compute_scrollbar (struct tab *tab, long visible, long s)
 {
+	long top = tab->item_top, total = tab->item_count;
 	if (total < visible)
 		return (struct scrollbar) { 0, 0 };
 	if (visible == 1)
-		return (struct scrollbar) { 1, 0 };
+		return (struct scrollbar) { s, 0 };
 	if (visible == 2)
-		return (struct scrollbar) { 1, top >= total / 2 };
+		return (struct scrollbar) { s, top >= total / 2 ? s : 0 };
 
 	// Only be at the top or bottom when the top or bottom item can be seen.
 	// The algorithm isn't optimal but it's a bitch to get right.
-	double lenf = 1. + (visible - 2.) * visible / total, length = 0.;
-	long offset = 1. + (visible - 2.) * top / total + modf (lenf, &length);
+	double available_length = s * visible - 2 - s + 1;
+
+	double lenf = s + available_length * visible / total, length = 0.;
+	long offset = 1 + available_length * top / total + modf (lenf, &length);
 
 	if (top == 0)
 		return (struct scrollbar) { length, 0 };
 	if (top + visible >= total)
-		return (struct scrollbar) { length, visible - length };
+		return (struct scrollbar) { length, s * visible - length };
 
 	return (struct scrollbar) { length, offset };
 }
@@ -1210,8 +1215,7 @@ app_draw_scrollbar (void)
 	hard_assert (tab->item_count != 0);
 	if (!g.use_partial_boxes)
 	{
-		struct scrollbar bar = app_compute_scrollbar
-			(tab->item_top, tab->item_count, visible_items);
+		struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 1);
 		for (int row = 0; row < visible_items; row++)
 		{
 			move (g.header_height + row, COLS - 1);
@@ -1223,19 +1227,11 @@ app_draw_scrollbar (void)
 		return;
 	}
 
-	// TODO: clamp the values, make sure they follow the right order
-	// We subtract half a character from both the top and the bottom, hence -1
-	// XXX: I'm not completely sure why we need that 0.5 constant in both
-	int length = (double) visible_items / tab->item_count
-		* (visible_items - 1) * 8 + 0.5;
-	int start  = (double) tab->item_top / tab->item_count
-		* (visible_items - 1) * 8 + 0.5;
+	struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 8);
+	bar.length += bar.start;
 
-	// Then we make sure the bar is at least one character high, hence +8
-	int end = start + length + 8;
-
-	int start_part = start % 8; start /= 8;
-	int end_part   = end   % 8; end   /= 8;
+	int start_part = bar.start  % 8; bar.start  /= 8;
+	int end_part   = bar.length % 8; bar.length /= 8;
 
 	// Even with this, the solid part must be at least one character high
 	static const char *partials[] = { "█", "▇", "▆", "▅", "▄", "▃", "▂", "▁" };
@@ -1243,12 +1239,12 @@ app_draw_scrollbar (void)
 	for (int row = 0; row < visible_items; row++)
 	{
 		chtype attrs = APP_ATTR (SCROLLBAR);
-		if (row > start && row <= end)
+		if (row > bar.start && row <= bar.length)
 			attrs ^= A_REVERSE;
 
 		const char *c = " ";
-		if (row == start) c = partials[start_part];
-		if (row == end)   c = partials[end_part];
+		if (row == bar.start)  c = partials[start_part];
+		if (row == bar.length) c = partials[end_part];
 
 		move (g.header_height + row, COLS - 1);
 
