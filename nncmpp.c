@@ -2141,6 +2141,8 @@ current_tab_move_song (const char *id, int diff)
 	char *target_str = xstrdup_printf ("%d", target);
 	mpd_client_send_command (c, "moveid", id, target_str, NULL);
 	free (target_str);
+	// TODO: we should create a cancellable action waiting for the move to
+	//   finish, so that holding Shift-arrows works as expected.
 	mpd_client_add_task (c, mpd_on_simple_response, NULL);
 	mpd_client_idle (c, 0);
 
