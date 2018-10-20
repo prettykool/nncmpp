@@ -20,31 +20,31 @@
 
 // We "need" to have an enum for attributes before including liberty.
 // Avoiding colours in the defaults here in order to support dumb terminals.
-#define ATTRIBUTE_TABLE(XX)                             \
-	XX( NORMAL,     "normal",     -1, -1, 0           ) \
-	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD      ) \
-	/* Gauge                                         */ \
-	XX( ELAPSED,    "elapsed",    -1, -1, A_REVERSE   ) \
-	XX( REMAINS,    "remains",    -1, -1, A_UNDERLINE ) \
-	/* Tab bar                                       */ \
-	XX( TAB_BAR,    "tab_bar",    -1, -1, A_REVERSE   ) \
-	XX( TAB_ACTIVE, "tab_active", -1, -1, A_UNDERLINE ) \
-	/* Listview                                      */ \
-	XX( HEADER,     "header",     -1, -1, A_UNDERLINE ) \
-	XX( EVEN,       "even",       -1, -1, 0           ) \
-	XX( ODD,        "odd",        -1, -1, 0           ) \
-	XX( DIRECTORY,  "directory",  -1, -1, 0           ) \
-	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
+#define ATTRIBUTE_TABLE(XX)                              \
+	XX( NORMAL,      "normal",     -1, -1, 0           ) \
+	XX( HIGHLIGHT,   "highlight",  -1, -1, A_BOLD      ) \
+	/* Gauge                                          */ \
+	XX( ELAPSED,     "elapsed",    -1, -1, A_REVERSE   ) \
+	XX( REMAINS,     "remains",    -1, -1, A_UNDERLINE ) \
+	/* Tab bar                                        */ \
+	XX( TAB_BAR,     "tab_bar",    -1, -1, A_REVERSE   ) \
+	XX( TAB_ACTIVE,  "tab_active", -1, -1, A_UNDERLINE ) \
+	/* Listview                                       */ \
+	XX( HEADER,      "header",     -1, -1, A_UNDERLINE ) \
+	XX( EVEN,        "even",       -1, -1, 0           ) \
+	XX( ODD,         "odd",        -1, -1, 0           ) \
+	XX( DIRECTORY,   "directory",  -1, -1, 0           ) \
+	XX( SELECTION,   "selection",  -1, -1, A_REVERSE   ) \
 	/* Cyan is good with both black and white.
 	 * Can't use A_REVERSE because bold'd be bright.
-	 * Unfortunately ran out of B&W attributes.      */ \
-	XX( MULTISELECT,"multiselect",-1,  6, 0           ) \
-	XX( SCROLLBAR,  "scrollbar",  -1, -1, 0           ) \
-	/* These are for debugging only                  */ \
-	XX( WARNING,    "warning",     3, -1, 0           ) \
-	XX( ERROR,      "error",       1, -1, 0           ) \
-	XX( INCOMING,   "incoming",    2, -1, 0           ) \
-	XX( OUTGOING,   "outgoing",    4, -1, 0           )
+	 * Unfortunately ran out of B&W attributes.       */ \
+	XX( MULTISELECT, "multiselect",-1,  6, 0           ) \
+	XX( SCROLLBAR,   "scrollbar",  -1, -1, 0           ) \
+	/* These are for debugging only                   */ \
+	XX( WARNING,     "warning",     3, -1, 0           ) \
+	XX( ERROR,       "error",       1, -1, 0           ) \
+	XX( INCOMING,    "incoming",    2, -1, 0           ) \
+	XX( OUTGOING,    "outgoing",    4, -1, 0           )
 
 enum
 {
@@ -540,7 +540,6 @@ item_list_resize (struct item_list *self, size_t len)
 // For simplicity, the listview can only work with items that are one row high.
 
 struct tab;
-struct row_buffer;
 enum action;
 
 /// Try to handle an action in the tab
