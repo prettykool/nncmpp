@@ -35,6 +35,10 @@
 	XX( ODD,        "odd",        -1, -1, 0           ) \
 	XX( DIRECTORY,  "directory",  -1, -1, 0           ) \
 	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
+	/* Cyan is good with both black and white.
+	 * Can't use A_REVERSE because bold'd be bright.
+	 * Unfortunately ran out of B&W attributes.      */ \
+	XX( MULTISELECT,"multiselect",-1,  6, 0           ) \
 	XX( SCROLLBAR,  "scrollbar",  -1, -1, 0           ) \
 	/* These are for debugging only                  */ \
 	XX( WARNING,    "warning",     3, -1, 0           ) \
@@ -569,6 +573,7 @@ struct tab
 
 	int item_top;                       ///< Index of the topmost item
 	int item_selected;                  ///< Index of the selected item
+	int item_mark;                      ///< Multiselect second point index
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -663,12 +668,24 @@ tab_init (struct tab *self, const char *name)
 	// and we'd need to filter it first to replace invalid chars with '?'
 	self->name_width = u8_strwidth ((uint8_t *) self->name, locale_charset ());
 	self->item_selected = 0;
+	self->item_mark = -1;
 }
 
 static void
 tab_free (struct tab *self)
 {
 	free (self->name);
+}
+
+static struct tab_range { int from, upto; }
+tab_selection_range (struct tab *self)
+{
+	if (self->item_selected < 0 || !self->item_count)
+		return (struct tab_range) { -1, -1 };
+	if (self->item_mark < 0)
+		return (struct tab_range) { self->item_selected, self->item_selected };
+	return (struct tab_range) { MIN (self->item_selected, self->item_mark),
+		MAX (self->item_selected, self->item_mark) };
 }
 
 // --- Configuration -----------------------------------------------------------
@@ -1263,8 +1280,16 @@ app_draw_view (void)
 	{
 		int item_index = tab->item_top + row;
 		int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
+
+		bool override_colors = true;
 		if (item_index == tab->item_selected)
 			row_attrs = APP_ATTR (SELECTION);
+		else if (tab->item_mark > -1 &&
+		   ((item_index >= tab->item_mark && item_index <= tab->item_selected)
+		 || (item_index >= tab->item_selected && item_index <= tab->item_mark)))
+			row_attrs = APP_ATTR (MULTISELECT);
+		else
+			override_colors = false;
 
 		struct row_buffer buf = row_buffer_make ();
 		tab->on_item_draw (item_index, &buf, view_width);
@@ -1274,7 +1299,7 @@ app_draw_view (void)
 		for (size_t i = 0; i < buf.chars_len; i++)
 		{
 			chtype *attrs = &buf.chars[i].attrs;
-			if (item_index == tab->item_selected)
+			if (override_colors)
 				*attrs = (*attrs & ~(A_COLOR | A_REVERSE)) | row_attrs;
 			else if ((*attrs & A_COLOR) && (row_attrs & A_COLOR))
 				*attrs |= (row_attrs & ~A_COLOR);
@@ -1323,7 +1348,15 @@ static void
 app_write_mpd_status (struct row_buffer *buf)
 {
 	struct str_map *map = &g.playback_info;
-	if (str_map_find (map, "updating_db"))
+	if (g.active_tab->item_mark > -1)
+	{
+		struct tab_range r = tab_selection_range (g.active_tab);
+		char *msg = xstrdup_printf (r.from == r.upto
+			? "Selected %d item" : "Selected %d items", r.upto - r.from + 1);
+		row_buffer_append (buf, msg, APP_ATTR (HIGHLIGHT));
+		free (msg);
+	}
+	else if (str_map_find (map, "updating_db"))
 		row_buffer_append (buf, "Updating database...", APP_ATTR (NORMAL));
 	else
 		app_write_mpd_status_playlist (buf);
@@ -1521,6 +1554,7 @@ app_goto_tab (int tab_index)
 	XX( CHOOSE,             "Choose item"                 ) \
 	XX( DELETE,             "Delete item"                 ) \
 	XX( UP,                 "Go up a level"               ) \
+	XX( MULTISELECT,        "Toggle multiselect"          ) \
 	\
 	XX( SCROLL_UP,          "Scroll up"                   ) \
 	XX( SCROLL_DOWN,        "Scroll down"                 ) \
@@ -1670,13 +1704,25 @@ app_process_action (enum action action)
 	// First let the tab try to handle this
 	struct tab *tab = g.active_tab;
 	if (tab->on_action && tab->on_action (action))
+	{
+		tab->item_mark = -1;
+		app_invalidate ();
 		return true;
+	}
 
 	switch (action)
 	{
 	case ACTION_NONE:
 		return true;
 	case ACTION_QUIT:
+		// It is a pseudomode, avoid surprising the user
+		if (tab->item_mark > -1)
+		{
+			tab->item_mark = -1;
+			app_invalidate ();
+			return true;
+		}
+
 		app_quit ();
 		return true;
 	case ACTION_REDRAW:
@@ -1690,6 +1736,18 @@ app_process_action (enum action action)
 		return true;
 	default:
 		return false;
+
+	case ACTION_MULTISELECT:
+		if (!tab->can_multiselect
+		 || !tab->item_count || tab->item_selected < 0)
+			return false;
+
+		app_invalidate ();
+		if (tab->item_mark > -1)
+			tab->item_mark = -1;
+		else
+			tab->item_mark = tab->item_selected;
+		return true;
 
 	case ACTION_LAST_TAB:
 		if (!g.last_tab)
@@ -1943,6 +2001,7 @@ g_normal_defaults[] =
 	{ "Enter",      ACTION_CHOOSE             },
 	{ "Delete",     ACTION_DELETE             },
 	{ "Backspace",  ACTION_UP                 },
+	{ "v",          ACTION_MULTISELECT        },
 	{ "a",          ACTION_MPD_ADD            },
 	{ "r",          ACTION_MPD_REPLACE        },
 	{ ":",          ACTION_MPD_COMMAND        },
@@ -2187,6 +2246,7 @@ current_tab_init (void)
 {
 	struct tab *super = &g_current_tab;
 	tab_init (super, "Current");
+	// TODO: implement multiselect, set can_multiselect to true
 	super->on_action = current_tab_on_action;
 	super->on_item_draw = current_tab_on_item_draw;
 	return super;
@@ -2412,6 +2472,9 @@ library_tab_on_data (const struct mpd_response *response,
 		(int (*) (const void *, const void *)) library_tab_compare);
 	g_library_tab.super.item_count = items->len;
 
+	// XXX: this unmarks even if just the database updates
+	g_library_tab.super.item_mark = -1;
+
 	// Don't force the selection visible when there's no need to touch it
 	if (g_library_tab.super.item_selected >= (int) items->len)
 		app_move_selection (0);
@@ -2433,21 +2496,36 @@ library_tab_reload (const char *new_path)
 }
 
 static bool
+library_tab_is_range_playable (struct tab_range range)
+{
+	for (int i = range.from; i <= range.upto; i++)
+	{
+		struct library_tab_item x =
+			library_tab_resolve (g_library_tab.items.vector[i]);
+		if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
+			return true;
+	}
+	return false;
+}
+
+static bool
 library_tab_on_action (enum action action)
 {
-	struct tab *self = g.active_tab;
-	if (self->item_selected < 0 || !self->item_count)
-		return false;
-
 	struct mpd_client *c = &g.client;
-	if (c->state != MPD_CONNECTED)
+	struct tab_range range = tab_selection_range (&g_library_tab.super);
+	if (range.from < 0 || c->state != MPD_CONNECTED)
 		return false;
 
 	struct library_tab_item x =
-		library_tab_resolve (g_library_tab.items.vector[self->item_selected]);
+		library_tab_resolve (g_library_tab.items.vector[range.from]);
+
 	switch (action)
 	{
 	case ACTION_CHOOSE:
+		// I can't think of a reasonable way of handling that
+		if (range.from != range.upto)
+			break;
+
 		switch (x.type)
 		{
 		case LIBRARY_ROOT:
@@ -2468,26 +2546,41 @@ library_tab_on_action (enum action action)
 		return parent != NULL;
 	}
 	case ACTION_MPD_REPLACE:
-		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
+		if (!library_tab_is_range_playable (range))
 			break;
 
 		// Clears the playlist (which stops playback), add what user wanted
 		// to replace it with, and eventually restore playback;
 		// I can't think of a reliable alternative that omits the "play"
 		mpd_client_list_begin (c);
+
 		mpd_client_send_command (c, "clear", NULL);
-		mpd_client_send_command (c, "add", x.path, NULL);
+		for (int i = range.from; i <= range.upto; i++)
+		{
+			struct library_tab_item x =
+				library_tab_resolve (g_library_tab.items.vector[i]);
+			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
+				mpd_client_send_command (c, "add", x.path, NULL);
+		}
 		if (g.state == PLAYER_PLAYING)
 			mpd_client_send_command (c, "play", NULL);
+
 		mpd_client_list_end (c);
 		mpd_client_add_task (c, mpd_on_simple_response, NULL);
 		mpd_client_idle (c, 0);
 		return true;
 	case ACTION_MPD_ADD:
-		if (x.type != LIBRARY_DIR && x.type != LIBRARY_FILE)
+		if (!library_tab_is_range_playable (range))
 			break;
 
-		return MPD_SIMPLE ("add", x.path);
+		for (int i = range.from; i <= range.upto; i++)
+		{
+			struct library_tab_item x =
+				library_tab_resolve (g_library_tab.items.vector[i]);
+			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
+				MPD_SIMPLE ("add", x.path);
+		}
+		return true;
 	default:
 		break;
 	}
@@ -2502,6 +2595,7 @@ library_tab_init (void)
 
 	struct tab *super = &g_library_tab.super;
 	tab_init (super, "Library");
+	super->can_multiselect = true;
 	super->on_action = library_tab_on_action;
 	super->on_item_draw = library_tab_on_item_draw;
 	return super;
