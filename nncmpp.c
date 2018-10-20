@@ -1545,6 +1545,7 @@ app_goto_tab (int tab_index)
 	XX( MPD_VOLUME_UP,      "Increase volume"             ) \
 	XX( MPD_VOLUME_DOWN,    "Decrease volume"             ) \
 	\
+	XX( MPD_SEARCH,         "Global search"               ) \
 	XX( MPD_ADD,            "Add selection to playlist"   ) \
 	XX( MPD_REPLACE,        "Replace playlist"            ) \
 	XX( MPD_UPDATE_DB,      "Update MPD database"         ) \
@@ -2001,6 +2002,7 @@ g_normal_defaults[] =
 	{ "Delete",     ACTION_DELETE             },
 	{ "Backspace",  ACTION_UP                 },
 	{ "v",          ACTION_MULTISELECT        },
+	{ "/",          ACTION_MPD_SEARCH         },
 	{ "a",          ACTION_MPD_ADD            },
 	{ "r",          ACTION_MPD_REPLACE        },
 	{ ":",          ACTION_MPD_COMMAND        },
@@ -2268,6 +2270,8 @@ static struct
 	struct str path;                    ///< Current path
 	struct strv items;                  ///< Current items (type, name, path)
 	struct library_level *above;        ///< Upper levels
+
+	bool searching;                     ///< Search mode is active
 }
 g_library_tab;
 
@@ -2375,13 +2379,13 @@ library_tab_parent (void)
 }
 
 static bool
-library_tab_is_above (const char *above, const char *path)
+library_tab_is_above (const char *above, const char *subdir)
 {
 	size_t above_len = strlen (above);
-	if (strncmp (above, path, above_len))
+	if (strncmp (above, subdir, above_len))
 		return false;
 	// The root is an empty string and is above anything other than itself
-	return path[above_len] == '/' || (*path && !*above);
+	return subdir[above_len] == '/' || (*subdir && !*above);
 }
 
 static void
@@ -2427,20 +2431,9 @@ library_tab_change_level (const char *new_path)
 }
 
 static void
-library_tab_on_data (const struct mpd_response *response,
-	const struct strv *data, void *user_data)
+library_tab_load_data (const struct strv *data)
 {
-	char *new_path = user_data;
-	if (!response->success)
-	{
-		print_error ("cannot read directory: %s", response->message_text);
-		free (new_path);
-		return;
-	}
-
 	strv_reset (&g_library_tab.items);
-	library_tab_change_level (new_path);
-	free (new_path);
 
 	char *parent = library_tab_parent ();
 	if (parent)
@@ -2482,8 +2475,30 @@ library_tab_on_data (const struct mpd_response *response,
 }
 
 static void
+library_tab_on_data (const struct mpd_response *response,
+	const struct strv *data, void *user_data)
+{
+	char *new_path = user_data;
+	if (!response->success)
+	{
+		print_error ("cannot read directory: %s", response->message_text);
+		free (new_path);
+		return;
+	}
+
+	g_library_tab.searching = false;
+	library_tab_change_level (new_path);
+	free (new_path);
+
+	library_tab_load_data (data);
+}
+
+static void
 library_tab_reload (const char *new_path)
 {
+	if (!new_path && g_library_tab.searching)
+		return;  // TODO: perhaps we should call search_on_changed()
+
 	char *path = new_path
 		? xstrdup (new_path)
 		: xstrdup (g_library_tab.path.str);
@@ -2493,6 +2508,48 @@ library_tab_reload (const char *new_path)
 	mpd_client_add_task (c, library_tab_on_data, path);
 	mpd_client_idle (c, 0);
 }
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+library_tab_on_search_data (const struct mpd_response *response,
+	const struct strv *data, void *user_data)
+{
+	(void) user_data;
+	if (!g_library_tab.searching)
+		return;
+
+	if (!response->success)
+	{
+		print_error ("cannot search: %s", response->message_text);
+		return;
+	}
+
+	library_tab_load_data (data);
+}
+
+static void
+search_on_changed (void)
+{
+	struct mpd_client *c = &g.client;
+
+	size_t len;
+	char *u8 = (char *) u32_to_u8 (g.editor.line, g.editor.len + 1, NULL, &len);
+	mpd_client_send_command (c, "search", "any", u8, NULL);
+	free (u8);
+
+	mpd_client_add_task (c, library_tab_on_search_data, NULL);
+	mpd_client_idle (c, 0);
+}
+
+static void
+search_on_end (bool confirmed)
+{
+	if (!confirmed)
+		library_tab_reload (g_library_tab.above->path);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
 library_tab_is_range_playable (struct tab_range range)
@@ -2544,6 +2601,47 @@ library_tab_on_action (enum action action)
 		}
 		return parent != NULL;
 	}
+	case ACTION_MPD_SEARCH:
+	{
+		line_editor_start (&g.editor, '/');
+		g.editor.on_changed = search_on_changed;
+		g.editor.on_end = search_on_end;
+
+		// We just need to be deeper but not match anything real,
+		// in order to keep the rest of the codebase functional as-is
+		if (!g_library_tab.searching)
+		{
+			char *fake_subdir = xstrdup_printf ("%s/", g_library_tab.path.str);
+			library_tab_change_level (fake_subdir);
+			free (fake_subdir);
+		}
+
+		free (g_library_tab.super.header);
+		g_library_tab.super.header = xstrdup_printf ("Global search");
+		g_library_tab.searching = true;
+
+		// Since we've already changed the header, empty the list,
+		// although to be consistent we should also ask to search for "",
+		// which dumps the database
+		struct strv empty = strv_make ();
+		library_tab_load_data (&empty);
+		strv_free (&empty);
+
+		app_invalidate ();
+		return true;
+	}
+	case ACTION_MPD_ADD:
+		if (!library_tab_is_range_playable (range))
+			break;
+
+		for (int i = range.from; i <= range.upto; i++)
+		{
+			struct library_tab_item x =
+				library_tab_resolve (g_library_tab.items.vector[i]);
+			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
+				MPD_SIMPLE ("add", x.path);
+		}
+		return true;
 	case ACTION_MPD_REPLACE:
 		if (!library_tab_is_range_playable (range))
 			break;
@@ -2567,18 +2665,6 @@ library_tab_on_action (enum action action)
 		mpd_client_list_end (c);
 		mpd_client_add_task (c, mpd_on_simple_response, NULL);
 		mpd_client_idle (c, 0);
-		return true;
-	case ACTION_MPD_ADD:
-		if (!library_tab_is_range_playable (range))
-			break;
-
-		for (int i = range.from; i <= range.upto; i++)
-		{
-			struct library_tab_item x =
-				library_tab_resolve (g_library_tab.items.vector[i]);
-			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
-				MPD_SIMPLE ("add", x.path);
-		}
 		return true;
 	default:
 		break;
