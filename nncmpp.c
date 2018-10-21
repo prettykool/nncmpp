@@ -1980,6 +1980,8 @@ g_normal_defaults[] =
 	{ "End",        ACTION_GOTO_BOTTOM        },
 	{ "M-<",        ACTION_GOTO_TOP           },
 	{ "M->",        ACTION_GOTO_BOTTOM        },
+	{ "g",          ACTION_GOTO_TOP           },
+	{ "G",          ACTION_GOTO_BOTTOM        },
 	{ "S-Up",       ACTION_MOVE_UP            },
 	{ "S-Down",     ACTION_MOVE_DOWN          },
 	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS },
