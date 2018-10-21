@@ -2002,6 +2002,7 @@ g_normal_defaults[] =
 	// Not sure how to set these up, they're pretty arbitrary so far
 	{ "Enter",      ACTION_CHOOSE             },
 	{ "Delete",     ACTION_DELETE             },
+	{ "d",          ACTION_DELETE             },
 	{ "Backspace",  ACTION_UP                 },
 	{ "v",          ACTION_MULTISELECT        },
 	{ "/",          ACTION_MPD_SEARCH         },
