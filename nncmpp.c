@@ -2220,6 +2220,7 @@ static bool
 current_tab_on_action (enum action action)
 {
 	struct tab *self = g.active_tab;
+	struct tab_range range = tab_selection_range (self);
 	compact_map_t map = item_list_get (&g.playlist, self->item_selected);
 
 	const char *id;
@@ -2228,10 +2229,31 @@ current_tab_on_action (enum action action)
 
 	switch (action)
 	{
+	// TODO: make this block more than just multiselect-tolerant
 	case ACTION_MOVE_UP:   return current_tab_move_song (id, -1);
 	case ACTION_MOVE_DOWN: return current_tab_move_song (id,  1);
-	case ACTION_CHOOSE:    return MPD_SIMPLE ("playid",   id);
-	case ACTION_DELETE:    return MPD_SIMPLE ("deleteid", id);
+
+	case ACTION_CHOOSE:
+		return MPD_SIMPLE ("playid", id);
+
+	case ACTION_DELETE:
+	{
+		struct mpd_client *c = &g.client;
+		if (range.from < 0 || c->state != MPD_CONNECTED)
+			return false;
+
+		mpd_client_list_begin (c);
+		for (int i = range.from; i <= range.upto; i++)
+		{
+			if ((map = item_list_get (&g.playlist, i))
+			 && (id = compact_map_find (map, "id")))
+				mpd_client_send_command (c, "deleteid", id, NULL);
+		}
+		mpd_client_list_end (c);
+		mpd_client_add_task (c, mpd_on_simple_response, NULL);
+		mpd_client_idle (c, 0);
+		return true;
+	}
 	default:
 		break;
 	}
@@ -2250,7 +2272,7 @@ current_tab_init (void)
 {
 	struct tab *super = &g_current_tab;
 	tab_init (super, "Current");
-	// TODO: implement multiselect, set can_multiselect to true
+	super->can_multiselect = true;
 	super->on_action = current_tab_on_action;
 	super->on_item_draw = current_tab_on_item_draw;
 	return super;
