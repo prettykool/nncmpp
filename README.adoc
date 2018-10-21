@@ -11,9 +11,9 @@ names, and should be pronounced as "nincompoop".
 
 Features
 --------
-Currently it's still under development but it's already useful enough for me
-to use it exclusively.  Note that since I only use the filesystem browsing mode,
-that's also the only thing I care to implement for the time being.
+Most things are there.  Enough for me to use it exclusively.  Note that since I
+only use the filesystem browsing mode, that's also the only thing I care to
+implement for the time being.
 
 image::nncmpp.png[align="center"]
 
@@ -59,16 +59,17 @@ settings = {
 	root       = "~/Music"
 }
 colors = {
-	normal     = ""
-	highlight  = "bold"
-	elapsed    = "reverse"
-	remains    = "ul"
-	tab_bar    = "reverse"
-	tab_active = "ul"
-	even       = ""
-	odd        = ""
-	selection  = "reverse"
-	scrollbar  = ""
+	normal      = ""
+	highlight   = "bold"
+	elapsed     = "reverse"
+	remains     = "ul"
+	tab_bar     = "reverse"
+	tab_active  = "ul"
+	even        = ""
+	odd         = ""
+	selection   = "reverse"
+	multiselect = "-1 6"
+	scrollbar   = ""
 }
 streams = {
 	"dnbradio.com" = "http://www.dnbradio.com/hi.m3u"
