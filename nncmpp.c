@@ -2280,6 +2280,8 @@ static void
 current_tab_update (void)
 {
 	g_current_tab.item_count = g.playlist.len;
+	g_current_tab.item_mark =
+		MIN ((int) g.playlist.len - 1, g_current_tab.item_mark);
 	app_invalidate ();
 }
 
@@ -3364,7 +3366,7 @@ mpd_update_playback_state (void)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
-mpd_process_info (const struct strv *data)
+mpd_process_info_data (const struct strv *data)
 {
 	struct str_map *map = &g.playback_info;
 
@@ -3396,6 +3398,57 @@ mpd_process_info (const struct strv *data)
 		}
 	}
 	str_map_free (&item);
+}
+
+/// Find a song by its id in the current playlist.  Expensive, rarely called.
+static ssize_t
+mpd_find_pos_of_id (const char *desired_id)
+{
+	compact_map_t map;
+	const char *id;
+	for (size_t i = 0; i < g.playlist.len; i++)
+	{
+		if ((map = item_list_get (&g.playlist, i))
+		 && (id = compact_map_find (map, "id"))
+		 && !strcmp (id, desired_id))
+			return i;
+	}
+	return -1;
+}
+
+static char *
+mpd_id_of_pos (int pos)
+{
+	compact_map_t map = item_list_get (&g.playlist, pos);
+	return map ? compact_map_find (map,  "id") : NULL;
+}
+
+static void
+mpd_process_info (const struct strv *data)
+{
+	int *selected = &g_current_tab.item_selected;
+	int *marked   = &g_current_tab.item_mark;
+	char *prev_sel_id  = mpd_id_of_pos (*selected);
+	char *prev_mark_id = mpd_id_of_pos (*marked);
+	if (prev_sel_id)   prev_sel_id  = xstrdup (prev_sel_id);
+	if (prev_mark_id)  prev_mark_id = xstrdup (prev_mark_id);
+
+	mpd_process_info_data (data);
+
+	const char *sel_id  = mpd_id_of_pos (*selected);
+	const char *mark_id = mpd_id_of_pos (*marked);
+
+	if (prev_mark_id && (!mark_id || strcmp (prev_mark_id, mark_id)))
+		*marked = mpd_find_pos_of_id (prev_mark_id);
+	if (prev_sel_id  && (!sel_id  || strcmp (prev_sel_id,  sel_id)))
+	{
+		if ((*selected = mpd_find_pos_of_id (prev_sel_id)) < 0)
+			*marked = -1;
+		app_move_selection (0);
+	}
+
+	free (prev_sel_id);
+	free (prev_mark_id);
 }
 
 static void
