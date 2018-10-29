@@ -2219,32 +2219,48 @@ mpd_on_move_response (const struct mpd_response *response,
 		print_error ("%s: %s", "command failed", response->message_text);
 }
 
+static void
+current_tab_move (int from, int to)
+{
+	compact_map_t map;
+	const char *id;
+	if (!(map = item_list_get (&g.playlist, from))
+	 || !(id = compact_map_find (map, "id")))
+		return;
+
+	char *target_str = xstrdup_printf ("%d", to);
+	mpd_client_send_command (&g.client, "moveid", id, target_str, NULL);
+	free (target_str);
+}
+
 static bool
 current_tab_move_selection (int diff)
 {
 	static bool already_moving;
-	if (already_moving)
+	if (already_moving || diff == 0)
 		return true;
 
-	// TODO: handle multiselect properly
-	struct tab *self = &g_current_tab;
 	struct mpd_client *c = &g.client;
-	compact_map_t map = item_list_get (&g.playlist, self->item_selected);
-
-	const char *id;
-	if (!map || !(id = compact_map_find (map, "id")))
+	if (c->state != MPD_CONNECTED)
 		return false;
 
-	int target = self->item_selected + diff;
-	if (c->state != MPD_CONNECTED || target < 0)
+	struct tab *self = &g_current_tab;
+	struct tab_range range = tab_selection_range (self);
+	if (range.from + diff < 0
+	 || range.upto + diff >= (int) self->item_count)
 		return false;
 
-	char *target_str = xstrdup_printf ("%d", target);
-	mpd_client_send_command (c, "moveid", id, target_str, NULL);
-	free (target_str);
+	mpd_client_list_begin (c);
+	if (diff < 0)
+		for (int i = range.from; i <= range.upto; i++)
+			current_tab_move (i, i + diff);
+	else
+		for (int i = range.upto; i >= range.from; i--)
+			current_tab_move (i, i + diff);
+	mpd_client_list_end (c);
+
 	mpd_client_add_task (c, mpd_on_move_response, &already_moving);
 	mpd_client_idle (c, 0);
-
 	return already_moving = true;
 }
 
