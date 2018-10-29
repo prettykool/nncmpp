@@ -1716,7 +1716,6 @@ app_process_action (enum action action)
 	struct tab *tab = g.active_tab;
 	if (tab->on_action && tab->on_action (action))
 	{
-		tab->item_mark = -1;
 		app_invalidate ();
 		return true;
 	}
@@ -2244,10 +2243,10 @@ current_tab_move_selection (int diff)
 	if (c->state != MPD_CONNECTED)
 		return false;
 
-	struct tab *self = &g_current_tab;
-	struct tab_range range = tab_selection_range (self);
+	struct tab *tab = &g_current_tab;
+	struct tab_range range = tab_selection_range (tab);
 	if (range.from + diff < 0
-	 || range.upto + diff >= (int) self->item_count)
+	 || range.upto + diff >= (int) tab->item_count)
 		return false;
 
 	mpd_client_list_begin (c);
@@ -2267,8 +2266,8 @@ current_tab_move_selection (int diff)
 static bool
 current_tab_on_action (enum action action)
 {
-	struct tab *self = &g_current_tab;
-	compact_map_t map = item_list_get (&g.playlist, self->item_selected);
+	struct tab *tab = &g_current_tab;
+	compact_map_t map = item_list_get (&g.playlist, tab->item_selected);
 	switch (action)
 	{
 		const char *id;
@@ -2277,12 +2276,13 @@ current_tab_on_action (enum action action)
 	case ACTION_MOVE_DOWN:
 		return current_tab_move_selection (+1);
 	case ACTION_CHOOSE:
+		tab->item_mark = -1;
 		return map && (id = compact_map_find (map, "id"))
 			&& MPD_SIMPLE ("playid", id);
 	case ACTION_DELETE:
 	{
 		struct mpd_client *c = &g.client;
-		struct tab_range range = tab_selection_range (self);
+		struct tab_range range = tab_selection_range (tab);
 		if (range.from < 0 || c->state != MPD_CONNECTED)
 			return false;
 
@@ -2495,6 +2495,7 @@ library_tab_change_level (const char *new_path)
 
 	free (g_library_tab.super.header);
 	g_library_tab.super.header = NULL;
+	g_library_tab.super.item_mark = -1;
 
 	if (path->len)
 		g_library_tab.super.header = xstrdup_printf ("/%s", path->str);
@@ -2638,8 +2639,12 @@ static bool
 library_tab_on_action (enum action action)
 {
 	struct mpd_client *c = &g.client;
-	struct tab_range range = tab_selection_range (&g_library_tab.super);
-	if (range.from < 0 || c->state != MPD_CONNECTED)
+	if (c->state != MPD_CONNECTED)
+		return false;
+
+	struct tab *tab = &g_library_tab.super;
+	struct tab_range range = tab_selection_range (tab);
+	if (range.from < 0)
 		return false;
 
 	struct library_tab_item x =
@@ -2660,6 +2665,7 @@ library_tab_on_action (enum action action)
 		case LIBRARY_FILE: MPD_SIMPLE ("add", x.path);  break;
 		default:           hard_assert (!"invalid item type");
 		}
+		tab->item_mark = -1;
 		return true;
 	case ACTION_UP:
 	{
@@ -2686,8 +2692,8 @@ library_tab_on_action (enum action action)
 			free (fake_subdir);
 		}
 
-		free (g_library_tab.super.header);
-		g_library_tab.super.header = xstrdup_printf ("Global search");
+		free (tab->header);
+		tab->header = xstrdup_printf ("Global search");
 		g_library_tab.searching = true;
 
 		// Since we've already changed the header, empty the list,
@@ -2711,6 +2717,7 @@ library_tab_on_action (enum action action)
 			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
 				MPD_SIMPLE ("add", x.path);
 		}
+		tab->item_mark = -1;
 		return true;
 	case ACTION_MPD_REPLACE:
 		if (!library_tab_is_range_playable (range))
@@ -2735,6 +2742,7 @@ library_tab_on_action (enum action action)
 		mpd_client_list_end (c);
 		mpd_client_add_task (c, mpd_on_simple_response, NULL);
 		mpd_client_idle (c, 0);
+		tab->item_mark = -1;
 		return true;
 	default:
 		break;
@@ -2977,12 +2985,12 @@ error:
 static bool
 streams_tab_on_action (enum action action)
 {
-	struct tab *self = g.active_tab;
-	if (self->item_selected < 0 || !self->item_count)
+	struct tab *tab = g.active_tab;
+	if (tab->item_selected < 0 || !tab->item_count)
 		return false;
 
 	// For simplicity the URL is the string following the stream name
-	const char *uri = 1 + strchr (g.streams.vector[self->item_selected], 0);
+	const char *uri = 1 + strchr (g.streams.vector[tab->item_selected], 0);
 
 	struct error *e = NULL;
 	switch (action)
@@ -3109,13 +3117,13 @@ g_help_tab;
 static bool
 help_tab_on_action (enum action action)
 {
-	struct tab *self = g.active_tab;
-	if (self->item_selected < 0
-	 || self->item_selected >= (int) g_help_tab.actions_len
+	struct tab *tab = &g_help_tab.super;
+	if (tab->item_selected < 0
+	 || tab->item_selected >= (int) g_help_tab.actions_len
 	 || action != ACTION_CHOOSE)
 		return false;
 
-	action = g_help_tab.actions[self->item_selected];
+	action = g_help_tab.actions[tab->item_selected];
 	return action != ACTION_NONE
 		&& action != ACTION_CHOOSE  // avoid recursion
 		&& app_process_action (action);
