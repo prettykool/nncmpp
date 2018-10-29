@@ -1366,7 +1366,6 @@ app_write_mpd_status (struct row_buffer *buf)
 	bool single  = (s = str_map_find (map, "single"))  && strcmp (s, "0");
 	bool consume = (s = str_map_find (map, "consume")) && strcmp (s, "0");
 
-	// TODO: remove the conditionals once we make them clickable
 	struct row_buffer right = row_buffer_make ();
 	chtype a[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
 	if (repeat)  row_buffer_append_args (&right,
