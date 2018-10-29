@@ -1548,6 +1548,10 @@ app_goto_tab (int tab_index)
 	XX( MPD_SEARCH,         "Global search"               ) \
 	XX( MPD_ADD,            "Add selection to playlist"   ) \
 	XX( MPD_REPLACE,        "Replace playlist"            ) \
+	XX( MPD_REPEAT,         "Toggle repeat"               ) \
+	XX( MPD_RANDOM,         "Toggle random playback"      ) \
+	XX( MPD_SINGLE,         "Toggle single song playback" ) \
+	XX( MPD_CONSUME,        "Toggle consume"              ) \
 	XX( MPD_UPDATE_DB,      "Update MPD database"         ) \
 	XX( MPD_COMMAND,        "Send raw command to MPD"     ) \
 	\
@@ -1699,6 +1703,14 @@ app_on_editor_end (bool confirmed)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
+app_mpd_toggle (const char *name)
+{
+	const char *s = str_map_find (&g.playback_info, name);
+	bool value = s && strcmp (s, "0");
+	return MPD_SIMPLE (name, value ? "0" : "1");
+}
+
+static bool
 app_process_action (enum action action)
 {
 	// First let the tab try to handle this
@@ -1767,6 +1779,10 @@ app_process_action (enum action action)
 	case ACTION_MPD_NEXT:               return MPD_SIMPLE ("next");
 	case ACTION_MPD_FORWARD:            return MPD_SIMPLE ("seekcur", "+10");
 	case ACTION_MPD_BACKWARD:           return MPD_SIMPLE ("seekcur", "-10");
+	case ACTION_MPD_REPEAT:             return app_mpd_toggle ("repeat");
+	case ACTION_MPD_RANDOM:             return app_mpd_toggle ("random");
+	case ACTION_MPD_SINGLE:             return app_mpd_toggle ("single");
+	case ACTION_MPD_CONSUME:            return app_mpd_toggle ("consume");
 	case ACTION_MPD_UPDATE_DB:          return MPD_SIMPLE ("update");
 
 	case ACTION_MPD_VOLUME_UP:          return app_setvol (g.volume + 10);
