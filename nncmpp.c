@@ -3071,7 +3071,8 @@ help_tab_strfkey (const termo_key_t *key, struct strv *out)
 }
 
 static void
-help_tab_group (struct binding *keys, size_t len, struct strv *out)
+help_tab_group (struct binding *keys, size_t len, struct strv *out,
+	bool bound[ACTION_COUNT])
 {
 	for (enum action i = 0; i < ACTION_COUNT; i++)
 	{
@@ -3085,9 +3086,22 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out)
 			strv_append_owned (out, xstrdup_printf
 				("  %-30s %s", g_actions[i].description, joined));
 			free (joined);
+
+			bound[i] = true;
 		}
 		strv_free (&ass);
 	}
+}
+
+static void
+help_tab_unbound (struct strv *out, bool bound[ACTION_COUNT])
+{
+	for (enum action i = 0; i < ACTION_COUNT; i++)
+		if (!bound[i])
+		{
+			strv_append_owned (out,
+				xstrdup_printf ("  %-30s", g_actions[i].description));
+		}
 }
 
 static void
@@ -3104,14 +3118,27 @@ static struct tab *
 help_tab_init (void)
 {
 	g_help_tab_lines = strv_make ();
+	bool bound[ACTION_COUNT] = { [ACTION_NONE] = true };
 
 	strv_append (&g_help_tab_lines, "Normal mode actions");
-	help_tab_group (g_normal_keys, g_normal_keys_len, &g_help_tab_lines);
+	help_tab_group (g_normal_keys, g_normal_keys_len, &g_help_tab_lines, bound);
 	strv_append (&g_help_tab_lines, "");
 
 	strv_append (&g_help_tab_lines, "Editor mode actions");
-	help_tab_group (g_editor_keys, g_editor_keys_len, &g_help_tab_lines);
+	help_tab_group (g_editor_keys, g_editor_keys_len, &g_help_tab_lines, bound);
 	strv_append (&g_help_tab_lines, "");
+
+	bool have_unbound = false;
+	for (enum action i = 0; i < ACTION_COUNT; i++)
+		if (!bound[i])
+			have_unbound = true;
+
+	if (have_unbound)
+	{
+		strv_append (&g_help_tab_lines, "Unbound actions");
+		help_tab_unbound (&g_help_tab_lines, bound);
+		strv_append (&g_help_tab_lines, "");
+	}
 
 	static struct tab super;
 	tab_init (&super, "Help");
