@@ -2209,52 +2209,65 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	free (s);
 }
 
-static bool
-current_tab_move_song (const char *id, int diff)
+static void
+mpd_on_move_response (const struct mpd_response *response,
+	const struct strv *data, void *user_data)
 {
-	struct mpd_client *c = &g.client;
-	int target = g_current_tab.item_selected + diff;
-	if (c->state != MPD_CONNECTED || target < 0)
-		return false;
+	(void) data;
 
-	char *target_str = xstrdup_printf ("%d", target);
-	mpd_client_send_command (c, "moveid", id, target_str, NULL);
-	free (target_str);
-	// TODO: we should create a cancellable action waiting for the move to
-	//   finish, so that holding Shift-arrows works as expected.
-	mpd_client_add_task (c, mpd_on_simple_response, NULL);
-	mpd_client_idle (c, 0);
-
-	// XXX: this behaves a bit erratically, as even if we waited for
-	//   a confirmation from the daemon, it would precede the playlist update
-	g_current_tab.item_selected = target;
-	app_move_selection (0);
-	return true;
+	*(bool *) user_data = false;
+	if (!response->success)
+		print_error ("%s: %s", "command failed", response->message_text);
 }
 
 static bool
-current_tab_on_action (enum action action)
+current_tab_move_selection (int diff)
 {
-	struct tab *self = g.active_tab;
-	struct tab_range range = tab_selection_range (self);
+	static bool already_moving;
+	if (already_moving)
+		return true;
+
+	// TODO: handle multiselect properly
+	struct tab *self = &g_current_tab;
+	struct mpd_client *c = &g.client;
 	compact_map_t map = item_list_get (&g.playlist, self->item_selected);
 
 	const char *id;
 	if (!map || !(id = compact_map_find (map, "id")))
 		return false;
 
+	int target = self->item_selected + diff;
+	if (c->state != MPD_CONNECTED || target < 0)
+		return false;
+
+	char *target_str = xstrdup_printf ("%d", target);
+	mpd_client_send_command (c, "moveid", id, target_str, NULL);
+	free (target_str);
+	mpd_client_add_task (c, mpd_on_move_response, &already_moving);
+	mpd_client_idle (c, 0);
+
+	return already_moving = true;
+}
+
+static bool
+current_tab_on_action (enum action action)
+{
+	struct tab *self = &g_current_tab;
+	compact_map_t map = item_list_get (&g.playlist, self->item_selected);
 	switch (action)
 	{
-	// TODO: make this block more than just multiselect-tolerant
-	case ACTION_MOVE_UP:   return current_tab_move_song (id, -1);
-	case ACTION_MOVE_DOWN: return current_tab_move_song (id,  1);
-
+		const char *id;
+	case ACTION_MOVE_UP:
+		return current_tab_move_selection (-1);
+	case ACTION_MOVE_DOWN:
+		return current_tab_move_selection (+1);
 	case ACTION_CHOOSE:
-		return MPD_SIMPLE ("playid", id);
-
+		return map && (id = compact_map_find (map, "id"))
+			&& MPD_SIMPLE ("playid", id);
 	case ACTION_DELETE:
 	{
 		struct mpd_client *c = &g.client;
+		struct tab_range range = tab_selection_range (self);
 		if (range.from < 0 || c->state != MPD_CONNECTED)
 			return false;
 
@@ -2271,9 +2284,8 @@ current_tab_on_action (enum action action)
 		return true;
 	}
 	default:
-		break;
+		return false;
 	}
-	return false;
 }
 
 static void
