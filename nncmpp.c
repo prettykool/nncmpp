@@ -3053,7 +3053,28 @@ info_tab_init (void)
 
 // --- Help tab ----------------------------------------------------------------
 
-static struct strv g_help_tab_lines;
+static struct
+{
+	struct tab super;                   ///< Parent class
+	ARRAY (enum action, actions)        ///< Actions for content
+	struct strv lines;                  ///< Visible content
+}
+g_help_tab;
+
+static bool
+help_tab_on_action (enum action action)
+{
+	struct tab *self = g.active_tab;
+	if (self->item_selected < 0
+	 || self->item_selected >= (int) g_help_tab.actions_len
+	 || action != ACTION_CHOOSE)
+		return false;
+
+	action = g_help_tab.actions[self->item_selected];
+	return action != ACTION_NONE
+		&& action != ACTION_CHOOSE  // avoid recursion
+		&& app_process_action (action);
+}
 
 static void
 help_tab_strfkey (const termo_key_t *key, struct strv *out)
@@ -3068,6 +3089,18 @@ help_tab_strfkey (const termo_key_t *key, struct strv *out)
 	char buf[16];
 	termo_strfkey_utf8 (g.tk, buf, sizeof buf, &fixed, TERMO_FORMAT_ALTISMETA);
 	strv_append (out, buf);
+}
+
+static void
+help_tab_assign_action (enum action action)
+{
+	hard_assert (g_help_tab.lines.len > g_help_tab.actions_len);
+
+	size_t to_push = g_help_tab.lines.len - g_help_tab.actions_len;
+	ARRAY_RESERVE (g_help_tab.actions, to_push);
+	for (size_t i = 1; i < to_push; i++)
+		g_help_tab.actions[g_help_tab.actions_len++] = ACTION_NONE;
+	g_help_tab.actions[g_help_tab.actions_len++] = action;
 }
 
 static void
@@ -3088,6 +3121,7 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out,
 			free (joined);
 
 			bound[i] = true;
+			help_tab_assign_action (i);
 		}
 		strv_free (&ass);
 	}
@@ -3101,6 +3135,7 @@ help_tab_unbound (struct strv *out, bool bound[ACTION_COUNT])
 		{
 			strv_append_owned (out,
 				xstrdup_printf ("  %-30s", g_actions[i].description));
+			help_tab_assign_action (i);
 		}
 }
 
@@ -3109,24 +3144,27 @@ help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 {
 	(void) width;
 
-	hard_assert (item_index < g_help_tab_lines.len);
-	const char *line = g_help_tab_lines.vector[item_index];
+	hard_assert (item_index < g_help_tab.lines.len);
+	const char *line = g_help_tab.lines.vector[item_index];
 	row_buffer_append (buffer, line, *line == ' ' ? 0 : A_BOLD);
 }
 
 static struct tab *
 help_tab_init (void)
 {
-	g_help_tab_lines = strv_make ();
+	ARRAY_INIT (g_help_tab.actions);
+	struct strv *lines = &g_help_tab.lines;
+	*lines = strv_make ();
+
 	bool bound[ACTION_COUNT] = { [ACTION_NONE] = true };
 
-	strv_append (&g_help_tab_lines, "Normal mode actions");
-	help_tab_group (g_normal_keys, g_normal_keys_len, &g_help_tab_lines, bound);
-	strv_append (&g_help_tab_lines, "");
+	strv_append (lines, "Normal mode actions");
+	help_tab_group (g_normal_keys, g_normal_keys_len, lines, bound);
+	strv_append (lines, "");
 
-	strv_append (&g_help_tab_lines, "Editor mode actions");
-	help_tab_group (g_editor_keys, g_editor_keys_len, &g_help_tab_lines, bound);
-	strv_append (&g_help_tab_lines, "");
+	strv_append (lines, "Editor mode actions");
+	help_tab_group (g_editor_keys, g_editor_keys_len, lines, bound);
+	strv_append (lines, "");
 
 	bool have_unbound = false;
 	for (enum action i = 0; i < ACTION_COUNT; i++)
@@ -3135,16 +3173,17 @@ help_tab_init (void)
 
 	if (have_unbound)
 	{
-		strv_append (&g_help_tab_lines, "Unbound actions");
-		help_tab_unbound (&g_help_tab_lines, bound);
-		strv_append (&g_help_tab_lines, "");
+		strv_append (lines, "Unbound actions");
+		help_tab_unbound (lines, bound);
+		strv_append (lines, "");
 	}
 
-	static struct tab super;
-	tab_init (&super, "Help");
-	super.on_item_draw = help_tab_on_item_draw;
-	super.item_count = g_help_tab_lines.len;
-	return &super;
+	struct tab *super = &g_help_tab.super;
+	tab_init (super, "Help");
+	super->on_action = help_tab_on_action;
+	super->on_item_draw = help_tab_on_item_draw;
+	super->item_count = lines->len;
+	return super;
 }
 
 // --- Debug tab ---------------------------------------------------------------
