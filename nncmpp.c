@@ -286,6 +286,9 @@ poller_curl_on_socket_action (CURL *easy, curl_socket_t s, int what,
 	}
 	if (what == CURL_POLL_REMOVE)
 	{
+		// Some annoying cURL bug.  Never trust libraries.
+		fd->fd.closed = fcntl(fd->fd.fd, F_GETFL) < 0 && errno == EBADF;
+
 		poller_fd_reset (&fd->fd);
 		LIST_UNLINK (self->fds, fd);
 		free (fd);
