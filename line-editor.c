@@ -1,7 +1,7 @@
 /*
  * line-editor.c: a line editor component for the TUI part of liberty
  *
- * Copyright (c) 2017 - 2018, Přemysl Janouch <p@janouch.name>
+ * Copyright (c) 2017 - 2018, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
