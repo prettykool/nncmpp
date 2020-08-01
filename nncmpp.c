@@ -2011,6 +2011,8 @@ g_normal_defaults[] =
 	{ "C-n",        ACTION_GOTO_ITEM_NEXT     },
 	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
 	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
+	{ "C-y",        ACTION_SCROLL_UP          },
+	{ "C-e",        ACTION_SCROLL_DOWN        },
 
 	{ "H",          ACTION_GOTO_VIEW_TOP      },
 	{ "M",          ACTION_GOTO_VIEW_CENTER   },
