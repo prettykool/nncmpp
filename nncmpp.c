@@ -1,7 +1,7 @@
 /*
  * nncmpp -- the MPD client you never knew you needed
  *
- * Copyright (c) 2016 - 2018, Přemysl Eric Janouch <p@janouch.name>
+ * Copyright (c) 2016 - 2020, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -1535,8 +1535,10 @@ app_goto_tab (int tab_index)
 	\
 	XX( QUIT,               "Quit"                        ) \
 	XX( REDRAW,             "Redraw screen"               ) \
-	XX( HELP_TAB,           "Switch to help tab"          ) \
-	XX( LAST_TAB,           "Switch to previous tab"      ) \
+	XX( TAB_HELP,           "Switch to help tab"          ) \
+	XX( TAB_LAST,           "Switch to last tab"          ) \
+	XX( TAB_PREVIOUS,       "Switch to previous tab"      ) \
+	XX( TAB_NEXT,           "Switch to next tab"          ) \
 	\
 	XX( MPD_TOGGLE,         "Toggle play/pause"           ) \
 	XX( MPD_STOP,           "Stop playback"               ) \
@@ -1762,13 +1764,29 @@ app_process_action (enum action action)
 			tab->item_mark = tab->item_selected;
 		return true;
 
-	case ACTION_LAST_TAB:
+	case ACTION_TAB_LAST:
 		if (!g.last_tab)
 			return false;
 		app_switch_tab (g.last_tab);
 		return true;
-	case ACTION_HELP_TAB:
+	case ACTION_TAB_HELP:
 		app_switch_tab (g.help_tab);
+		return true;
+	case ACTION_TAB_PREVIOUS:
+		if (g.active_tab == g.help_tab)
+			return false;
+		if (!g.active_tab->prev)
+			app_switch_tab (g.help_tab);
+		else
+			app_switch_tab (g.active_tab->prev);
+		return true;
+	case ACTION_TAB_NEXT:
+		if (g.active_tab == g.help_tab)
+			app_switch_tab (g.tabs);
+		else if (g.active_tab->next)
+			app_switch_tab (g.active_tab->next);
+		else
+			return false;
 		return true;
 
 	case ACTION_MPD_TOGGLE:
@@ -1990,8 +2008,12 @@ g_normal_defaults[] =
 	{ "Escape",     ACTION_QUIT               },
 	{ "q",          ACTION_QUIT               },
 	{ "C-l",        ACTION_REDRAW             },
-	{ "M-Tab",      ACTION_LAST_TAB           },
-	{ "F1",         ACTION_HELP_TAB           },
+	{ "M-Tab",      ACTION_TAB_LAST           },
+	{ "F1",         ACTION_TAB_HELP           },
+	{ "C-Left",     ACTION_TAB_PREVIOUS       },
+	{ "C-Right",    ACTION_TAB_NEXT           },
+	{ "C-PageUp",   ACTION_TAB_PREVIOUS       },
+	{ "C-PageDown", ACTION_TAB_NEXT           },
 
 	{ "Home",       ACTION_GOTO_TOP           },
 	{ "End",        ACTION_GOTO_BOTTOM        },
