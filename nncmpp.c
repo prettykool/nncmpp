@@ -21,30 +21,30 @@
 // We "need" to have an enum for attributes before including liberty.
 // Avoiding colours in the defaults here in order to support dumb terminals.
 #define ATTRIBUTE_TABLE(XX)                              \
-	XX( NORMAL,      "normal",     -1, -1, 0           ) \
-	XX( HIGHLIGHT,   "highlight",  -1, -1, A_BOLD      ) \
+	XX( NORMAL,      normal,       -1, -1, 0           ) \
+	XX( HIGHLIGHT,   highlight,    -1, -1, A_BOLD      ) \
 	/* Gauge                                          */ \
-	XX( ELAPSED,     "elapsed",    -1, -1, A_REVERSE   ) \
-	XX( REMAINS,     "remains",    -1, -1, A_UNDERLINE ) \
+	XX( ELAPSED,     elapsed,      -1, -1, A_REVERSE   ) \
+	XX( REMAINS,     remains,      -1, -1, A_UNDERLINE ) \
 	/* Tab bar                                        */ \
-	XX( TAB_BAR,     "tab_bar",    -1, -1, A_REVERSE   ) \
-	XX( TAB_ACTIVE,  "tab_active", -1, -1, A_UNDERLINE ) \
+	XX( TAB_BAR,     tab_bar,      -1, -1, A_REVERSE   ) \
+	XX( TAB_ACTIVE,  tab_active,   -1, -1, A_UNDERLINE ) \
 	/* Listview                                       */ \
-	XX( HEADER,      "header",     -1, -1, A_UNDERLINE ) \
-	XX( EVEN,        "even",       -1, -1, 0           ) \
-	XX( ODD,         "odd",        -1, -1, 0           ) \
-	XX( DIRECTORY,   "directory",  -1, -1, 0           ) \
-	XX( SELECTION,   "selection",  -1, -1, A_REVERSE   ) \
+	XX( HEADER,      header,       -1, -1, A_UNDERLINE ) \
+	XX( EVEN,        even,         -1, -1, 0           ) \
+	XX( ODD,         odd,          -1, -1, 0           ) \
+	XX( DIRECTORY,   directory,    -1, -1, 0           ) \
+	XX( SELECTION,   selection,    -1, -1, A_REVERSE   ) \
 	/* Cyan is good with both black and white.
 	 * Can't use A_REVERSE because bold'd be bright.
 	 * Unfortunately ran out of B&W attributes.       */ \
-	XX( MULTISELECT, "multiselect",-1,  6, 0           ) \
-	XX( SCROLLBAR,   "scrollbar",  -1, -1, 0           ) \
+	XX( MULTISELECT, multiselect,  -1,  6, 0           ) \
+	XX( SCROLLBAR,   scrollbar,    -1, -1, 0           ) \
 	/* These are for debugging only                   */ \
-	XX( WARNING,     "warning",     3, -1, 0           ) \
-	XX( ERROR,       "error",       1, -1, 0           ) \
-	XX( INCOMING,    "incoming",    2, -1, 0           ) \
-	XX( OUTGOING,    "outgoing",    4, -1, 0           )
+	XX( WARNING,     warning,       3, -1, 0           ) \
+	XX( ERROR,       error,         1, -1, 0           ) \
+	XX( INCOMING,    incoming,      2, -1, 0           ) \
+	XX( OUTGOING,    outgoing,      4, -1, 0           )
 
 enum
 {
@@ -710,7 +710,7 @@ static struct config_schema g_config_settings[] =
 static struct config_schema g_config_colors[] =
 {
 #define XX(name_, config, fg_, bg_, attrs_) \
-	{ .name = config, .type = CONFIG_ITEM_STRING },
+	{ .name = #config, .type = CONFIG_ITEM_STRING },
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 	{}
@@ -745,7 +745,7 @@ load_config_colors (struct config_item *subtree, void *user_data)
 	// For simplicity, we should reload the entire table on each change anyway.
 	const char *value;
 #define XX(name, config, fg_, bg_, attrs_) \
-	if ((value = get_config_string (subtree, config))) \
+	if ((value = get_config_string (subtree, #config))) \
 		g.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
 	ATTRIBUTE_TABLE (XX)
 #undef XX
@@ -1531,69 +1531,69 @@ app_goto_tab (int tab_index)
 // --- Actions -----------------------------------------------------------------
 
 #define ACTIONS(XX) \
-	XX( NONE,               "Do nothing"                  ) \
+	XX( NONE,               Do nothing                  ) \
 	\
-	XX( QUIT,               "Quit"                        ) \
-	XX( REDRAW,             "Redraw screen"               ) \
-	XX( TAB_HELP,           "Switch to help tab"          ) \
-	XX( TAB_LAST,           "Switch to last tab"          ) \
-	XX( TAB_PREVIOUS,       "Switch to previous tab"      ) \
-	XX( TAB_NEXT,           "Switch to next tab"          ) \
+	XX( QUIT,               Quit                        ) \
+	XX( REDRAW,             Redraw screen               ) \
+	XX( TAB_HELP,           Switch to help tab          ) \
+	XX( TAB_LAST,           Switch to last tab          ) \
+	XX( TAB_PREVIOUS,       Switch to previous tab      ) \
+	XX( TAB_NEXT,           Switch to next tab          ) \
 	\
-	XX( MPD_TOGGLE,         "Toggle play/pause"           ) \
-	XX( MPD_STOP,           "Stop playback"               ) \
-	XX( MPD_PREVIOUS,       "Previous song"               ) \
-	XX( MPD_NEXT,           "Next song"                   ) \
-	XX( MPD_BACKWARD,       "Seek backwards"              ) \
-	XX( MPD_FORWARD,        "Seek forwards"               ) \
-	XX( MPD_VOLUME_UP,      "Increase volume"             ) \
-	XX( MPD_VOLUME_DOWN,    "Decrease volume"             ) \
+	XX( MPD_TOGGLE,         Toggle play/pause           ) \
+	XX( MPD_STOP,           Stop playback               ) \
+	XX( MPD_PREVIOUS,       Previous song               ) \
+	XX( MPD_NEXT,           Next song                   ) \
+	XX( MPD_BACKWARD,       Seek backwards              ) \
+	XX( MPD_FORWARD,        Seek forwards               ) \
+	XX( MPD_VOLUME_UP,      Increase volume             ) \
+	XX( MPD_VOLUME_DOWN,    Decrease volume             ) \
 	\
-	XX( MPD_SEARCH,         "Global search"               ) \
-	XX( MPD_ADD,            "Add selection to playlist"   ) \
-	XX( MPD_REPLACE,        "Replace playlist"            ) \
-	XX( MPD_REPEAT,         "Toggle repeat"               ) \
-	XX( MPD_RANDOM,         "Toggle random playback"      ) \
-	XX( MPD_SINGLE,         "Toggle single song playback" ) \
-	XX( MPD_CONSUME,        "Toggle consume"              ) \
-	XX( MPD_UPDATE_DB,      "Update MPD database"         ) \
-	XX( MPD_COMMAND,        "Send raw command to MPD"     ) \
+	XX( MPD_SEARCH,         Global search               ) \
+	XX( MPD_ADD,            Add selection to playlist   ) \
+	XX( MPD_REPLACE,        Replace playlist            ) \
+	XX( MPD_REPEAT,         Toggle repeat               ) \
+	XX( MPD_RANDOM,         Toggle random playback      ) \
+	XX( MPD_SINGLE,         Toggle single song playback ) \
+	XX( MPD_CONSUME,        Toggle consume              ) \
+	XX( MPD_UPDATE_DB,      Update MPD database         ) \
+	XX( MPD_COMMAND,        Send raw command to MPD     ) \
 	\
-	XX( CHOOSE,             "Choose item"                 ) \
-	XX( DELETE,             "Delete item"                 ) \
-	XX( UP,                 "Go up a level"               ) \
-	XX( MULTISELECT,        "Toggle multiselect"          ) \
+	XX( CHOOSE,             Choose item                 ) \
+	XX( DELETE,             Delete item                 ) \
+	XX( UP,                 Go up a level               ) \
+	XX( MULTISELECT,        Toggle multiselect          ) \
 	\
-	XX( SCROLL_UP,          "Scroll up"                   ) \
-	XX( SCROLL_DOWN,        "Scroll down"                 ) \
-	XX( MOVE_UP,            "Move selection up"           ) \
-	XX( MOVE_DOWN,          "Move selection down"         ) \
+	XX( SCROLL_UP,          Scroll up                   ) \
+	XX( SCROLL_DOWN,        Scroll down                 ) \
+	XX( MOVE_UP,            Move selection up           ) \
+	XX( MOVE_DOWN,          Move selection down         ) \
 	\
-	XX( GOTO_TOP,           "Go to top"                   ) \
-	XX( GOTO_BOTTOM,        "Go to bottom"                ) \
-	XX( GOTO_ITEM_PREVIOUS, "Go to previous item"         ) \
-	XX( GOTO_ITEM_NEXT,     "Go to next item"             ) \
-	XX( GOTO_PAGE_PREVIOUS, "Go to previous page"         ) \
-	XX( GOTO_PAGE_NEXT,     "Go to next page"             ) \
+	XX( GOTO_TOP,           Go to top                   ) \
+	XX( GOTO_BOTTOM,        Go to bottom                ) \
+	XX( GOTO_ITEM_PREVIOUS, Go to previous item         ) \
+	XX( GOTO_ITEM_NEXT,     Go to next item             ) \
+	XX( GOTO_PAGE_PREVIOUS, Go to previous page         ) \
+	XX( GOTO_PAGE_NEXT,     Go to next page             ) \
 	\
-	XX( GOTO_VIEW_TOP,      "Select top item"             ) \
-	XX( GOTO_VIEW_CENTER,   "Select center item"          ) \
-	XX( GOTO_VIEW_BOTTOM,   "Select bottom item"          ) \
+	XX( GOTO_VIEW_TOP,      Select top item             ) \
+	XX( GOTO_VIEW_CENTER,   Select center item          ) \
+	XX( GOTO_VIEW_BOTTOM,   Select bottom item          ) \
 	\
-	XX( EDITOR_CONFIRM,     "Confirm input"               ) \
+	XX( EDITOR_CONFIRM,     Confirm input               ) \
 	\
-	XX( EDITOR_B_CHAR,      "Go back a character"         ) \
-	XX( EDITOR_F_CHAR,      "Go forward a character"      ) \
-	XX( EDITOR_B_WORD,      "Go back a word"              ) \
-	XX( EDITOR_F_WORD,      "Go forward a word"           ) \
-	XX( EDITOR_HOME,        "Go to start of line"         ) \
-	XX( EDITOR_END,         "Go to end of line"           ) \
+	XX( EDITOR_B_CHAR,      Go back a character         ) \
+	XX( EDITOR_F_CHAR,      Go forward a character      ) \
+	XX( EDITOR_B_WORD,      Go back a word              ) \
+	XX( EDITOR_F_WORD,      Go forward a word           ) \
+	XX( EDITOR_HOME,        Go to start of line         ) \
+	XX( EDITOR_END,         Go to end of line           ) \
 	\
-	XX( EDITOR_B_DELETE,    "Delete last character"       ) \
-	XX( EDITOR_F_DELETE,    "Delete next character"       ) \
-	XX( EDITOR_B_KILL_WORD, "Delete last word"            ) \
-	XX( EDITOR_B_KILL_LINE, "Delete everything up to BOL" ) \
-	XX( EDITOR_F_KILL_LINE, "Delete everything up to EOL" )
+	XX( EDITOR_B_DELETE,    Delete last character       ) \
+	XX( EDITOR_F_DELETE,    Delete next character       ) \
+	XX( EDITOR_B_KILL_WORD, Delete last word            ) \
+	XX( EDITOR_B_KILL_LINE, Delete everything up to BOL ) \
+	XX( EDITOR_F_KILL_LINE, Delete everything up to EOL )
 
 enum action
 {
@@ -1610,7 +1610,7 @@ static struct action_info
 }
 g_actions[] =
 {
-#define XX(name, description) { #name, description },
+#define XX(name, description) { #name, #description },
 	ACTIONS (XX)
 #undef XX
 };
