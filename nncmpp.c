@@ -2970,6 +2970,8 @@ streams_tab_process (const char *uri, bool replace, struct error **e)
 	task.replace = replace;
 	bool result = false;
 
+	struct curl_slist *ok_headers = curl_slist_append (NULL, "ICY 200 OK");
+
 	CURLcode res;
 	if ((res = curl_easy_setopt (easy, CURLOPT_FOLLOWLOCATION, 1L))
 	 || (res = curl_easy_setopt (easy, CURLOPT_NOPROGRESS,     1L))
@@ -2979,6 +2981,7 @@ streams_tab_process (const char *uri, bool replace, struct error **e)
 	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYPEER, 0L))
 	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYHOST, 0L))
 	 || (res = curl_easy_setopt (easy, CURLOPT_URL,            uri))
+	 || (res = curl_easy_setopt (easy, CURLOPT_HTTP200ALIASES, ok_headers))
 
 	 || (res = curl_easy_setopt (easy, CURLOPT_VERBOSE, (long) g_debug_mode))
 	 || (res = curl_easy_setopt (easy, CURLOPT_DEBUGFUNCTION, print_curl_debug))
@@ -3002,6 +3005,7 @@ streams_tab_process (const char *uri, bool replace, struct error **e)
 
 error:
 	curl_easy_cleanup (task.curl.easy);
+	curl_slist_free_all (ok_headers);
 	str_free (&task.data);
 	poller_curl_free (&pc);
 
