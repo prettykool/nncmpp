@@ -47,13 +47,13 @@ else (USE_SYSTEM_TERMO)
 	set (Termo_LIBRARIES termo-static)
 endif (USE_SYSTEM_TERMO)
 
-include_directories (${UNISTRING_INCLUDE_DIRS}
-	${NCURSESW_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS} ${curl_INCLUDE_DIRS})
+include_directories (${Unistring_INCLUDE_DIRS}
+	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS} ${curl_INCLUDE_DIRS})
 link_directories (${curl_LIBRARY_DIRS})
 
 # Configuration
 include (CheckFunctionExists)
-set (CMAKE_REQUIRED_LIBRARIES ${NCURSESW_LIBRARIES})
+set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
 CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
 
 # Generate a configuration file
@@ -63,8 +63,8 @@ include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 
 # Build the main executable and link it
 add_executable (${PROJECT_NAME} ${PROJECT_NAME}.c)
-target_link_libraries (${PROJECT_NAME} ${UNISTRING_LIBRARIES}
-	${NCURSESW_LIBRARIES} termo-static ${curl_LIBRARIES})
+target_link_libraries (${PROJECT_NAME} ${Unistring_LIBRARIES}
+	${Ncursesw_LIBRARIES} termo-static ${curl_LIBRARIES})
 add_threads (${PROJECT_NAME})
 
 # Installation

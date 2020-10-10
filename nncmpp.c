@@ -174,7 +174,7 @@ print_curl_debug (CURL *easy, curl_infotype type, char *data, size_t len,
 	for (size_t i = 0; i < len; i++)
 	{
 		uint8_t c = data[i];
-		copy[i] = c >= 32 || c == '\n' ? c : '.';
+		copy[i] = !iscntrl_ascii (c) || c == '\n' ? c : '.';
 	}
 	copy[len] = '\0';
 
@@ -2520,8 +2520,7 @@ library_tab_change_level (const char *new_path)
 	str_reset (path);
 	str_append (path, new_path);
 
-	free (g_library_tab.super.header);
-	g_library_tab.super.header = NULL;
+	cstr_set (&g_library_tab.super.header, NULL);
 	g_library_tab.super.item_mark = -1;
 
 	if (path->len)
@@ -2719,8 +2718,7 @@ library_tab_on_action (enum action action)
 			free (fake_subdir);
 		}
 
-		free (tab->header);
-		tab->header = xstrdup_printf ("Global search");
+		cstr_set (&tab->header, xstrdup_printf ("Global search"));
 		g_library_tab.searching = true;
 
 		// Since we've already changed the header, empty the list,
@@ -2876,7 +2874,7 @@ streams_tab_extract_links (struct str *data, const char *content_type,
 	for (size_t i = 0; i < data->len; i++)
 	{
 		uint8_t c = data->str[i];
-		if ((c < 32) & (c != '\t') & (c != '\r') & (c != '\n'))
+		if (iscntrl_ascii (c) & (c != '\t') & (c != '\r') & (c != '\n'))
 			return false;
 	}
 
@@ -3860,8 +3858,7 @@ app_on_message_timer (void *user_data)
 {
 	(void) user_data;
 
-	free (g.message);
-	g.message = NULL;
+	cstr_set (&g.message, NULL);
 	app_invalidate ();
 }
 
@@ -3889,8 +3886,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 			user_data == NULL ? 0 : g.attrs[(intptr_t) user_data].attrs);
 	else
 	{
-		free (g.message);
-		g.message = xstrdup (message.str);
+		cstr_set (&g.message, xstrdup (message.str));
 		app_invalidate ();
 		poller_timer_set (&g.message_timer, 5000);
 	}
