@@ -609,7 +609,7 @@ static struct app_context
 	struct str_map playback_info;       ///< Current song info
 
 	struct poller_timer elapsed_event;  ///< Seconds elapsed event
-	int64_t elapsed_since;              ///< Time of the next tick
+	int64_t elapsed_since;              ///< Time of the last tick
 
 	// TODO: initialize these to -1
 	int song;                           ///< Current song index
@@ -3410,7 +3410,9 @@ mpd_update_playback_state (void)
 	poller_timer_reset (&g.elapsed_event);
 	if (g.state == PLAYER_PLAYING)
 	{
+		// Set a timer for when the next round second of playback happens
 		poller_timer_set (&g.elapsed_event, 1000 - msec_past_second);
+		// Remember when the last round second was, relative to monotonic time
 		g.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
 	}
 
@@ -3540,12 +3542,16 @@ static void
 mpd_on_tick (void *user_data)
 {
 	(void) user_data;
+
+	// Compute how much time has elapsed since the last round second
 	int64_t diff_msec = clock_msec (CLOCK_BEST) - g.elapsed_since;
 	int elapsed_sec = diff_msec / 1000;
 	int elapsed_msec = diff_msec % 1000;
 
 	g.song_elapsed += elapsed_sec;
 	g.elapsed_since += elapsed_sec * 1000;
+
+	// Try to get called on the next round second of playback
 	poller_timer_set (&g.elapsed_event, 1000 - elapsed_msec);
 
 	app_invalidate ();
