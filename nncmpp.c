@@ -82,6 +82,9 @@ enum
 
 // ncurses is notoriously retarded for input handling, we need something
 // different if only to receive mouse events reliably.
+//
+// 2020 update: ncurses is mostly reliable now but rxvt-unicode needs to start
+// supporting 1006, or ncurses needs to start supporting the 1015 mode.
 
 #include "termo.h"
 
@@ -3360,6 +3363,7 @@ mpd_read_time (const char *value, int *sec, int *optional_msec)
 		unsigned long n = strtoul (period + 1, &end, 10);
 		if (*end)
 			return;
+		// XXX: this relies on three decimal places
 		*optional_msec = MIN (INT_MAX, n);
 	}
 	unsigned long n = strtoul (value, &end, 10);
