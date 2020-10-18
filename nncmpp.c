@@ -610,6 +610,7 @@ static struct app_context
 
 	struct poller_timer elapsed_event;  ///< Seconds elapsed event
 	int64_t elapsed_since;              ///< Time of the last tick
+	bool elapsed_poll;                  ///< Poll MPD for the elapsed time?
 
 	// TODO: initialize these to -1
 	int song;                           ///< Current song index
@@ -692,6 +693,13 @@ tab_selection_range (struct tab *self)
 
 // --- Configuration -----------------------------------------------------------
 
+static void
+on_poll_elapsed_time_changed (struct config_item *item)
+{
+	// This is only set once, on application startup
+	g.elapsed_poll = item->value.boolean;
+}
+
 static struct config_schema g_config_settings[] =
 {
 	{ .name      = "address",
@@ -704,6 +712,11 @@ static struct config_schema g_config_settings[] =
 	{ .name      = "root",
 	  .comment   = "Where all the files MPD is playing are located",
 	  .type      = CONFIG_ITEM_STRING },
+	{ .name      = "poll_elapsed_time",
+	  .comment   = "Whether to actively poll MPD for the elapsed time",
+	  .type      = CONFIG_ITEM_BOOLEAN,
+	  .on_change = on_poll_elapsed_time_changed,
+	  .default_  = "off" },
 	{}
 };
 
@@ -3406,12 +3419,19 @@ mpd_update_playback_state (void)
 	mpd_read_time (duration, &g.song_duration, NULL);
 	strv_free (&fields);
 
-	// We could also just poll the server each half a second but let's not
 	poller_timer_reset (&g.elapsed_event);
 	if (g.state == PLAYER_PLAYING)
 	{
+		int until_next = 1000 - msec_past_second;
+
+		// We could make use of "until_next", however this might create
+		// an intensive busy loop when playback stalls (typically because of
+		// some network issues).  Half a second will work reasonably well.
+		if (g.elapsed_poll)
+			until_next = 500;
+
 		// Set a timer for when the next round second of playback happens
-		poller_timer_set (&g.elapsed_event, 1000 - msec_past_second);
+		poller_timer_set (&g.elapsed_event, until_next);
 		// Remember when the last round second was, relative to monotonic time
 		g.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
 	}
@@ -3539,7 +3559,7 @@ mpd_on_info_response (const struct mpd_response *response,
 }
 
 static void
-mpd_on_tick (void *user_data)
+mpd_on_elapsed_time_tick (void *user_data)
 {
 	(void) user_data;
 
@@ -3570,6 +3590,15 @@ mpd_request_info (void)
 	mpd_client_list_end (c);
 	mpd_client_add_task (c, mpd_on_info_response, NULL);
 	mpd_client_idle (c, 0);
+}
+
+static void
+mpd_on_elapsed_time_tick_poll (void *user_data)
+{
+	(void) user_data;
+
+	// As soon as the reply arrives, we (may) set the timer again
+	mpd_request_info ();
 }
 
 static void
@@ -3923,7 +3952,9 @@ app_init_poller_events (void)
 	poller_timer_set (&g.connect_event, 0);
 
 	g.elapsed_event = poller_timer_make (&g.poller);
-	g.elapsed_event.dispatcher = mpd_on_tick;
+	g.elapsed_event.dispatcher = g.elapsed_poll
+		? mpd_on_elapsed_time_tick_poll
+		: mpd_on_elapsed_time_tick;
 
 	g.refresh_event = poller_idle_make (&g.poller);
 	g.refresh_event.dispatcher = app_on_refresh;
