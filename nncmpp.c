@@ -612,7 +612,7 @@ static struct app_context
 	struct str_map playback_info;       ///< Current song info
 
 	struct poller_timer elapsed_event;  ///< Seconds elapsed event
-	int64_t elapsed_since;              ///< Time of the last tick
+	int64_t elapsed_since;              ///< Last tick ts or last elapsed time
 	bool elapsed_poll;                  ///< Poll MPD for the elapsed time?
 
 	// TODO: initialize these to -1
@@ -719,7 +719,7 @@ static struct config_schema g_config_settings[] =
 	  .comment   = "Whether to actively poll MPD for the elapsed time",
 	  .type      = CONFIG_ITEM_BOOLEAN,
 	  .on_change = on_poll_elapsed_time_changed,
-	  .default_  = "off" },
+	  .default_  = "on" },
 	{}
 };
 
@@ -3424,20 +3424,31 @@ mpd_update_playback_state (void)
 	strv_free (&fields);
 
 	poller_timer_reset (&g.elapsed_event);
-	if (g.state == PLAYER_PLAYING)
+	if (g.state != PLAYER_PLAYING)
+		g.elapsed_since = -1;
+	else
 	{
 		int until_next = 1000 - msec_past_second;
 
-		// We could make use of "until_next", however this might create
-		// an intensive busy loop when playback stalls (typically because of
-		// some network issues).  Half a second will work reasonably well.
+		int elapsed_msec = g.song_elapsed * 1000 + msec_past_second;
 		if (g.elapsed_poll)
-			until_next = 500;
+		{
+			// We may receive an earlier time, this seems to compensate it well;
+			// in any case MPD polling can't achieve any significant stability
+			until_next += 100;
+			// When playback stalls, avoid busy looping with the server
+			if (elapsed_msec == g.elapsed_since)
+				until_next = MAX (until_next, 500);
+		}
 
 		// Set a timer for when the next round second of playback happens
 		poller_timer_set (&g.elapsed_event, until_next);
 		// Remember when the last round second was, relative to monotonic time
 		g.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
+
+		// In polling mode, we're interested in progress rather than stability
+		if (g.elapsed_poll)
+			g.elapsed_since = elapsed_msec;
 	}
 
 	// The server sends -1 when nothing is being played right now
