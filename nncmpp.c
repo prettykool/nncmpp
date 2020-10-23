@@ -3388,6 +3388,33 @@ mpd_update_playlist_time (void)
 }
 
 static void
+mpd_set_elapsed_timer (int msec_past_second)
+{
+	int delay_msec = 1000 - msec_past_second;  // Until the next round second
+	if (!g.elapsed_poll)
+	{
+		poller_timer_set (&g.elapsed_event, delay_msec);
+		// Remember when the last round second was, relative to monotonic time
+		g.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
+		return;
+	}
+
+	// We may receive an earlier time, this seems to compensate for it well
+	// (I haven't seen it trigger more than 50ms too early)
+	delay_msec += 100;
+
+	// When playback stalls, avoid busy looping with the server
+	int elapsed_msec = g.song_elapsed * 1000 + msec_past_second;
+	if (elapsed_msec == g.elapsed_since)
+		delay_msec = MAX (delay_msec, 500);
+
+	// In polling mode, we're interested in progress rather than stability.
+	// We can reuse both the poller_timer struct and the timestamp field.
+	poller_timer_set (&g.elapsed_event, delay_msec);
+	g.elapsed_since = elapsed_msec;
+}
+
+static void
 mpd_update_playback_state (void)
 {
 	struct str_map *map = &g.playback_info;
@@ -3424,32 +3451,10 @@ mpd_update_playback_state (void)
 	strv_free (&fields);
 
 	poller_timer_reset (&g.elapsed_event);
-	if (g.state != PLAYER_PLAYING)
-		g.elapsed_since = -1;
+	if (g.state == PLAYER_PLAYING)
+		mpd_set_elapsed_timer (msec_past_second);
 	else
-	{
-		int until_next = 1000 - msec_past_second;
-
-		int elapsed_msec = g.song_elapsed * 1000 + msec_past_second;
-		if (g.elapsed_poll)
-		{
-			// We may receive an earlier time, this seems to compensate it well;
-			// in any case MPD polling can't achieve any significant stability
-			until_next += 100;
-			// When playback stalls, avoid busy looping with the server
-			if (elapsed_msec == g.elapsed_since)
-				until_next = MAX (until_next, 500);
-		}
-
-		// Set a timer for when the next round second of playback happens
-		poller_timer_set (&g.elapsed_event, until_next);
-		// Remember when the last round second was, relative to monotonic time
-		g.elapsed_since = clock_msec (CLOCK_BEST) - msec_past_second;
-
-		// In polling mode, we're interested in progress rather than stability
-		if (g.elapsed_poll)
-			g.elapsed_since = elapsed_msec;
-	}
+		g.elapsed_since = -1;
 
 	// The server sends -1 when nothing is being played right now
 	unsigned long n;
