@@ -2060,6 +2060,7 @@ g_normal_defaults[] =
 	{ "Enter",      ACTION_CHOOSE             },
 	{ "Delete",     ACTION_DELETE             },
 	{ "d",          ACTION_DELETE             },
+	{ "M-Up",       ACTION_UP                 },
 	{ "Backspace",  ACTION_UP                 },
 	{ "v",          ACTION_MULTISELECT        },
 	{ "/",          ACTION_MPD_SEARCH         },
