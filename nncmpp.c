@@ -2406,17 +2406,6 @@ struct library_level
 	char path[];                        ///< Path of the level
 };
 
-static struct
-{
-	struct tab super;                   ///< Parent class
-	struct str path;                    ///< Current path
-	struct strv items;                  ///< Current items (type, name, path)
-	struct library_level *above;        ///< Upper levels
-
-	bool searching;                     ///< Search mode is active
-}
-g_library_tab;
-
 enum
 {
 	// This list is also ordered by ASCII and important for sorting
@@ -2430,25 +2419,39 @@ enum
 struct library_tab_item
 {
 	int type;                           ///< Type of the item
-	const char *name;                   ///< Visible name
-	const char *path;                   ///< MPD path
+	int duration;                       ///< Duration or -1 if N/A or unknown
+	char *name;                         ///< Visible name
+	const char *path;                   ///< MPD path (follows the name)
 };
 
-static void
-library_tab_add (int type, const char *name, const char *path)
+static struct
 {
-	strv_append_owned (&g_library_tab.items,
-		xstrdup_printf ("%c%s%c%s", type, name, 0, path));
-}
+	struct tab super;                   ///< Parent class
+	struct str path;                    ///< Current path
+	struct library_level *above;        ///< Upper levels
 
-static struct library_tab_item
-library_tab_resolve (const char *raw)
+	/// Current items
+	ARRAY (struct library_tab_item, items)
+
+	bool searching;                     ///< Search mode is active
+}
+g_library_tab;
+
+static void
+library_tab_add (int type, int duration, const char *name, const char *path)
 {
-	struct library_tab_item item;
-	item.type = *raw++;
-	item.name = raw;
-	item.path = strchr (raw, '\0') + 1;
-	return item;
+	// Slightly reduce memory overhead while retaining friendly access
+	size_t name_len = strlen (name), path_len = strlen (path);
+	char *combined = xmalloc (++name_len + ++path_len);
+
+	ARRAY_RESERVE (g_library_tab.items, 1);
+	g_library_tab.items[g_library_tab.items_len++] = (struct library_tab_item)
+	{
+		.type = type,
+		.duration = duration,
+		.name = memcpy (combined, name, name_len),
+		.path = memcpy (combined + name_len, path, path_len),
+	};
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2458,20 +2461,19 @@ library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	int width)
 {
 	(void) width;
-	hard_assert (item_index < g_library_tab.items.len);
+	hard_assert (item_index < g_library_tab.items_len);
 
-	struct library_tab_item x =
-		library_tab_resolve (g_library_tab.items.vector[item_index]);
+	struct library_tab_item *x = &g_library_tab.items[item_index];
 	const char *prefix, *name;
-	switch (x.type)
+	switch (x->type)
 	{
-	case LIBRARY_ROOT: prefix = "/"; name = "";     break;
-	case LIBRARY_UP:   prefix = "/"; name = "..";   break;
-	case LIBRARY_DIR:  prefix = "/"; name = x.name; break;
-	case LIBRARY_FILE: prefix = " "; name = x.name; break;
+	case LIBRARY_ROOT: prefix = "/"; name = "";      break;
+	case LIBRARY_UP:   prefix = "/"; name = "..";    break;
+	case LIBRARY_DIR:  prefix = "/"; name = x->name; break;
+	case LIBRARY_FILE: prefix = " "; name = x->name; break;
 	default:           hard_assert (!"invalid item type");
 	}
-	chtype attrs = x.type != LIBRARY_FILE ? APP_ATTR (DIRECTORY) : 0;
+	chtype attrs = x->type != LIBRARY_FILE ? APP_ATTR (DIRECTORY) : 0;
 	row_buffer_append_args (buffer, prefix, attrs, name, attrs, NULL);
 }
 
@@ -2491,20 +2493,21 @@ library_tab_chunk (char type, const char *path, struct str_map *map)
 	char *name = (artist && title)
 		? xstrdup_printf ("%s - %s", artist, title)
 		: xstrdup (xbasename (path));
-	library_tab_add (type, name, path);
+
+	int duration = -1;
+	mpd_read_time (str_map_find (map, "duration"), &duration, NULL);
+	mpd_read_time (str_map_find (map, "time"),     &duration, NULL);
+	library_tab_add (type, duration, name, path);
 	free (name);
 }
 
 static int
-library_tab_compare (char **a, char **b)
+library_tab_compare (struct library_tab_item *a, struct library_tab_item *b)
 {
-	struct library_tab_item xa = library_tab_resolve (*a);
-	struct library_tab_item xb = library_tab_resolve (*b);
+	if (a->type != b->type)
+		return a->type - b->type;
 
-	if (xa.type != xb.type)
-		return xa.type - xb.type;
-
-	return app_casecmp ((uint8_t *) xa.path, (uint8_t *) xb.path);
+	return app_casecmp ((uint8_t *) a->path, (uint8_t *) b->path);
 }
 
 static char *
@@ -2573,15 +2576,24 @@ library_tab_change_level (const char *new_path)
 }
 
 static void
+library_tab_reset (void)
+{
+	for (size_t i = 0; i < g_library_tab.items_len; i++)
+		free (g_library_tab.items[i].name);
+	free (g_library_tab.items);
+	ARRAY_INIT (g_library_tab.items);
+}
+
+static void
 library_tab_load_data (const struct strv *data)
 {
-	strv_reset (&g_library_tab.items);
+	library_tab_reset ();
 
 	char *parent = library_tab_parent ();
 	if (parent)
 	{
-		library_tab_add (LIBRARY_ROOT, "", "");
-		library_tab_add (LIBRARY_UP, "", parent);
+		library_tab_add (LIBRARY_ROOT, -1, "", "");
+		library_tab_add (LIBRARY_UP, -1, "", parent);
 		free (parent);
 	}
 
@@ -2601,16 +2613,16 @@ library_tab_load_data (const struct strv *data)
 		}
 	str_map_free (&map);
 
-	struct strv *items = &g_library_tab.items;
-	qsort (items->vector, items->len, sizeof *items->vector,
+	struct library_tab_item *items = g_library_tab.items;
+	size_t len = g_library_tab.super.item_count = g_library_tab.items_len;
+	qsort (items, len, sizeof *items,
 		(int (*) (const void *, const void *)) library_tab_compare);
-	g_library_tab.super.item_count = items->len;
 
 	// XXX: this unmarks even if just the database updates
 	g_library_tab.super.item_mark = -1;
 
 	// Don't force the selection visible when there's no need to touch it
-	if (g_library_tab.super.item_selected >= (int) items->len)
+	if (g_library_tab.super.item_selected >= (int) len)
 		app_move_selection (0);
 
 	app_invalidate ();
@@ -2698,9 +2710,8 @@ library_tab_is_range_playable (struct tab_range range)
 {
 	for (int i = range.from; i <= range.upto; i++)
 	{
-		struct library_tab_item x =
-			library_tab_resolve (g_library_tab.items.vector[i]);
-		if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
+		struct library_tab_item *x = &g_library_tab.items[i];
+		if (x->type == LIBRARY_DIR || x->type == LIBRARY_FILE)
 			return true;
 	}
 	return false;
@@ -2718,9 +2729,7 @@ library_tab_on_action (enum action action)
 	if (range.from < 0)
 		return false;
 
-	struct library_tab_item x =
-		library_tab_resolve (g_library_tab.items.vector[range.from]);
-
+	struct library_tab_item *x = &g_library_tab.items[range.from];
 	switch (action)
 	{
 	case ACTION_CHOOSE:
@@ -2728,12 +2737,12 @@ library_tab_on_action (enum action action)
 		if (range.from != range.upto)
 			break;
 
-		switch (x.type)
+		switch (x->type)
 		{
 		case LIBRARY_ROOT:
 		case LIBRARY_UP:
-		case LIBRARY_DIR:  library_tab_reload (x.path); break;
-		case LIBRARY_FILE: MPD_SIMPLE ("add", x.path);  break;
+		case LIBRARY_DIR:  library_tab_reload (x->path); break;
+		case LIBRARY_FILE: MPD_SIMPLE ("add", x->path);  break;
 		default:           hard_assert (!"invalid item type");
 		}
 		tab->item_mark = -1;
@@ -2782,10 +2791,9 @@ library_tab_on_action (enum action action)
 
 		for (int i = range.from; i <= range.upto; i++)
 		{
-			struct library_tab_item x =
-				library_tab_resolve (g_library_tab.items.vector[i]);
-			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
-				MPD_SIMPLE ("add", x.path);
+			struct library_tab_item *x = &g_library_tab.items[i];
+			if (x->type == LIBRARY_DIR || x->type == LIBRARY_FILE)
+				MPD_SIMPLE ("add", x->path);
 		}
 		tab->item_mark = -1;
 		return true;
@@ -2801,10 +2809,9 @@ library_tab_on_action (enum action action)
 		mpd_client_send_command (c, "clear", NULL);
 		for (int i = range.from; i <= range.upto; i++)
 		{
-			struct library_tab_item x =
-				library_tab_resolve (g_library_tab.items.vector[i]);
-			if (x.type == LIBRARY_DIR || x.type == LIBRARY_FILE)
-				mpd_client_send_command (c, "add", x.path, NULL);
+			struct library_tab_item *x = &g_library_tab.items[i];
+			if (x->type == LIBRARY_DIR || x->type == LIBRARY_FILE)
+				mpd_client_send_command (c, "add", x->path, NULL);
 		}
 		if (g.state == PLAYER_PLAYING)
 			mpd_client_send_command (c, "play", NULL);
@@ -2824,7 +2831,7 @@ static struct tab *
 library_tab_init (void)
 {
 	g_library_tab.path = str_make ();
-	g_library_tab.items = strv_make ();
+	// g_library_tab.items is fine with zero initialisation
 
 	struct tab *super = &g_library_tab.super;
 	tab_init (super, "Library");
