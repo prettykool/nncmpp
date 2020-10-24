@@ -744,6 +744,12 @@ static struct config_schema g_config_settings[] =
 	{ .name      = "root",
 	  .comment   = "Where all the files MPD is playing are located",
 	  .type      = CONFIG_ITEM_STRING },
+
+	// Disabling this minimises MPD traffic and has the following caveats:
+	//  - when MPD stalls on retrieving audio data, we keep ticking
+	//  - when the "play" succeeds in ACTION_MPD_REPLACE for the same item as
+	//    is currently playing, we do not reset g.song_elapsed (we could ask
+	//    for a response which feels racy, or rethink the mechanism there)
 	{ .name      = "poll_elapsed_time",
 	  .comment   = "Whether to actively poll MPD for the elapsed time",
 	  .type      = CONFIG_ITEM_BOOLEAN,
