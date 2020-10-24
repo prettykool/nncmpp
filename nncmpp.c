@@ -209,6 +209,35 @@ mpd_parse_kv (char *line, char **value)
 	return key;
 }
 
+static void
+mpd_read_time (const char *value, int *sec, int *optional_msec)
+{
+	if (!value)
+		return;
+
+	char *end = NULL;
+	long n = strtol (value, &end, 10);
+	if (n < 0 || (*end && *end != '.'))
+		return;
+
+	int msec = 0;
+	if (*end == '.')
+	{
+		// In practice, MPD always uses three decimal digits
+		size_t digits = strspn (++end, "0123456789");
+		if (end[digits])
+			return;
+
+		if (digits--) msec += (*end++ - '0') * 100;
+		if (digits--) msec += (*end++ - '0') * 10;
+		if (digits--) msec +=  *end++ - '0';
+	}
+
+	*sec = MIN (INT_MAX, n);
+	if (optional_msec)
+		*optional_msec = msec;
+}
+
 // --- cURL async wrapper ------------------------------------------------------
 
 // You are meant to subclass this structure, no user_data pointers needed
@@ -2239,12 +2268,11 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 
 	row_buffer_align (buffer, width - length_len, attrs);
 
-	char *s = NULL;
-	unsigned long n;
-	const char *time = compact_map_find (map, "time");
-	if (!time || !xstrtoul (&n, time, 10) || !(s = app_time_string (n)))
-		s = xstrdup ("?");
+	int duration = -1;
+	mpd_read_time (compact_map_find (map, "duration"), &duration, NULL);
+	mpd_read_time (compact_map_find (map, "time"),     &duration, NULL);
 
+	char *s = duration < 0 ? xstrdup ("-") : app_time_string (duration);
 	char *right_aligned = xstrdup_printf ("%*s", length_len, s);
 	row_buffer_append (buffer, right_aligned, attrs);
 	free (right_aligned);
@@ -3351,35 +3379,6 @@ debug_tab_init (void)
 }
 
 // --- MPD interface -----------------------------------------------------------
-
-static void
-mpd_read_time (const char *value, int *sec, int *optional_msec)
-{
-	if (!value)
-		return;
-
-	char *end = NULL;
-	long n = strtol (value, &end, 10);
-	if (n < 0 || (*end && *end != '.'))
-		return;
-
-	int msec = 0;
-	if (*end == '.')
-	{
-		// In practice, MPD always uses three decimal digits
-		size_t digits = strspn (++end, "0123456789");
-		if (end[digits])
-			return;
-
-		if (digits--) msec += (*end++ - '0') * 100;
-		if (digits--) msec += (*end++ - '0') * 10;
-		if (digits--) msec +=  *end++ - '0';
-	}
-
-	*sec = MIN (INT_MAX, n);
-	if (optional_msec)
-		*optional_msec = msec;
-}
 
 static void
 mpd_update_playlist_time (void)
