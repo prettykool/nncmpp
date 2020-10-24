@@ -2410,10 +2410,11 @@ enum
 {
 	// This list is also ordered by ASCII and important for sorting
 
-	LIBRARY_ROOT = '/',                 ///< Root entry
-	LIBRARY_UP   = '^',                 ///< Upper directory
-	LIBRARY_DIR  = 'd',                 ///< Directory
-	LIBRARY_FILE = 'f'                  ///< File
+	LIBRARY_ROOT     = '/',             ///< Root entry
+	LIBRARY_UP       = '^',             ///< Upper directory
+	LIBRARY_DIR      = 'd',             ///< Directory
+	LIBRARY_FILE     = 'f',             ///< File
+	LIBRARY_PLAYLIST = 'p',             ///< Playlist (unsupported)
 };
 
 struct library_tab_item
@@ -2482,12 +2483,18 @@ library_tab_header_type (const char *key)
 {
 	if (!strcasecmp_ascii (key, "file"))      return LIBRARY_FILE;
 	if (!strcasecmp_ascii (key, "directory")) return LIBRARY_DIR;
+	if (!strcasecmp_ascii (key, "playlist"))  return LIBRARY_PLAYLIST;
 	return 0;
 }
 
 static void
 library_tab_chunk (char type, const char *path, struct str_map *map)
 {
+	// CUE files appear once as a directory and another time as a playlist,
+	// just skip them entirely
+	if (type == LIBRARY_PLAYLIST)
+		return;
+
 	const char *artist = str_map_find (map, "artist");
 	const char *title  = str_map_find (map, "title");
 	char *name = (artist && title)
