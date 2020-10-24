@@ -3358,18 +3358,27 @@ mpd_read_time (const char *value, int *sec, int *optional_msec)
 	if (!value)
 		return;
 
-	char *end, *period = strchr (value, '.');
-	if (optional_msec && period)
+	char *end = NULL;
+	long n = strtol (value, &end, 10);
+	if (n < 0 || (*end && *end != '.'))
+		return;
+
+	int msec = 0;
+	if (*end == '.')
 	{
-		unsigned long n = strtoul (period + 1, &end, 10);
-		if (*end)
+		// In practice, MPD always uses three decimal digits
+		size_t digits = strspn (++end, "0123456789");
+		if (end[digits])
 			return;
-		// XXX: this relies on three decimal places
-		*optional_msec = MIN (INT_MAX, n);
+
+		if (digits--) msec += (*end++ - '0') * 100;
+		if (digits--) msec += (*end++ - '0') * 10;
+		if (digits--) msec +=  *end++ - '0';
 	}
-	unsigned long n = strtoul (value, &end, 10);
-	if (end == period || !*end)
-		*sec = MIN (INT_MAX, n);
+
+	*sec = MIN (INT_MAX, n);
+	if (optional_msec)
+		*optional_msec = msec;
 }
 
 static void
