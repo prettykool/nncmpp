@@ -2248,13 +2248,13 @@ app_process_termo_event (termo_key_t *event)
 
 static struct tab g_current_tab;
 
+#define DURATION_MAX_LEN (1 /*separator */ + 2 /* h */ + 3 /* m */+ 3 /* s */)
+
 static void
 current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	int width)
 {
 	// TODO: configurable output, maybe dynamically sized columns
-	int length_len = 1 /*separator */ + 2 /* h */ + 3 /* m */+ 3 /* s */;
-
 	compact_map_t map = item_list_get (&g.playlist, item_index);
 	const char *artist = compact_map_find (map, "artist");
 	const char *title  = compact_map_find (map, "title");
@@ -2266,14 +2266,14 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	else
 		row_buffer_append (buffer, compact_map_find (map, "file"), attrs);
 
-	row_buffer_align (buffer, width - length_len, attrs);
+	row_buffer_align (buffer, width - DURATION_MAX_LEN, attrs);
 
 	int duration = -1;
 	mpd_read_time (compact_map_find (map, "duration"), &duration, NULL);
 	mpd_read_time (compact_map_find (map, "time"),     &duration, NULL);
 
 	char *s = duration < 0 ? xstrdup ("-") : app_time_string (duration);
-	char *right_aligned = xstrdup_printf ("%*s", length_len, s);
+	char *right_aligned = xstrdup_printf ("%*s", DURATION_MAX_LEN, s);
 	row_buffer_append (buffer, right_aligned, attrs);
 	free (right_aligned);
 	free (s);
@@ -2476,6 +2476,13 @@ library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	}
 	chtype attrs = x->type != LIBRARY_FILE ? APP_ATTR (DIRECTORY) : 0;
 	row_buffer_append_args (buffer, prefix, attrs, name, attrs, NULL);
+	if (x->duration < 0)
+		return;
+
+	char *s = app_time_string (x->duration);
+	row_buffer_align (buffer, width - 2 /* gap */ - strlen (s), 0);
+	row_buffer_append_args (buffer, "  " /* gap */, 0, s, 0, NULL);
+	free (s);
 }
 
 static char
