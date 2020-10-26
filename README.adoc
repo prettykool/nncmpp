@@ -43,9 +43,6 @@ Or you can try telling CMake to make a package for you.  For Debian it is:
  $ cpack -G DEB
  # dpkg -i nncmpp-*.deb
 
-Note that for versions of CMake before 2.8.9, you need to prefix `cpack` with
-`fakeroot` or file ownership will end up wrong.
-
 Having the program installed, create a configuration file and run it.
 
 Configuration
