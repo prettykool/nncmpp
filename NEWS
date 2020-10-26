@@ -1,3 +1,25 @@
+1.0.0 (2020-11-05)
+
+ * Coming with a real manual page instead of a help2man-generated stub
+
+ * Added a mode to poll MPD for the elapsed time, enabled by default,
+   fixing two cases of improper tracking
+
+ * Started showing song duration in the library
+
+ * Added C-PgUp/PgDown and C-Left/Right bindings to iterate tabs
+
+ * Added VIM-like C-y and C-e bindings for scrolling
+
+ * Added Windows Explorer-like M-Up binding to go up a directory
+
+ * Worked around a cURL bug crashing the application
+
+ * Fixed handling of direct SHOUTcast streams
+
+ * Miscellaneous little fixes
+
+
 0.9.0 (2018-11-02)
 
  * Initial release
