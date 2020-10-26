@@ -1,0 +1,87 @@
+nncmpp(1)
+=========
+:doctype: manpage
+:manmanual: nncmpp Manual
+:mansource: nncmpp {release-version}
+
+Name
+----
+nncmpp - terminal-based MPD client
+
+Synopsis
+--------
+*nncmpp* [_OPTION_]...
+
+Description
+-----------
+*nncmpp* is a terminal-based GUI-like MPD client.  On start up it will welcome
+you with an overview of all key bindings and the actions they're assigned to.
+Individual tabs can be switched to either using the mouse or by pressing *M-1*
+through *M-9*, corresponding to the order they appear in.
+
+Options
+-------
+*-d*, *--debug*::
+	Adds a "Debug" tab showing all MPD communication and other information
+	that help debug various issues.
+
+*-h*, *--help*::
+	Display a help message and exit.
+
+*-V*, *--version*::
+	Output version information and exit.
+
+Configuration
+-------------
+Unless you run MPD on a remote machine, on an unusual port, or protected by
+a password, the client doesn't need a configuration file to work.  It is,
+however, likely that you'll want to customize the looks or add some streams.
+You can start off with the following snippet:
+
+....
+settings = {
+	address    = "localhost:6600"
+	password   = "<your password>"
+	root       = "~/Music"
+}
+colors = {
+	normal      = ""
+	highlight   = "bold"
+	elapsed     = "reverse"
+	remains     = "ul"
+	tab_bar     = "reverse"
+	tab_active  = "ul"
+	even        = ""
+	odd         = ""
+	selection   = "reverse"
+	multiselect = "-1 6"
+	scrollbar   = ""
+}
+streams = {
+	"dnbradio.com" = "http://www.dnbradio.com/hi.m3u"
+	"BassDrive.com" = "http://bassdrive.com/v2/streams/BassDrive.pls"
+}
+....
+
+Terminal attributes are accepted in a format similar to that of *git-config*(1),
+only named colours aren't supported.  The distribution contains example colour
+schemes in the _contrib_ directory.
+
+// TODO: it seems like liberty should contain an includable snippet about
+//   the format, which could form a part of nncmpp.conf(5).
+
+Files
+-----
+*nncmpp* follows the XDG Base Directory Specification.
+
+_~/.config/nncmpp/nncmpp.conf_::
+	The configuration file.
+
+Reporting bugs
+--------------
+Use https://git.janouch.name/p/nncmpp to report bugs, request features,
+or submit pull requests.
+
+See also
+--------
+*mpd*(1)

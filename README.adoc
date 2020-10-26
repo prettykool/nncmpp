@@ -22,9 +22,14 @@ Packages
 Regular releases are sporadic.  git master should be stable enough.  You can get
 a package with the latest development version from Archlinux's AUR.
 
-Building and Running
---------------------
-Build dependencies: CMake, pkg-config, help2man, liberty (included),
+Documentation
+-------------
+See the link:nncmpp.adoc[man page] for information about usage.
+The rest of this README will concern itself with externalities.
+
+Building
+--------
+Build dependencies: CMake, pkg-config, asciidoctor, liberty (included),
                     termo (included) +
 Runtime dependencies: ncursesw, libunistring, cURL
 
@@ -42,37 +47,6 @@ Or you can try telling CMake to make a package for you.  For Debian it is:
 
  $ cpack -G DEB
  # dpkg -i nncmpp-*.deb
-
-Having the program installed, create a configuration file and run it.
-
-Configuration
--------------
-Create _~/.config/nncmpp/nncmpp.conf_ with contents like the following:
-
-....
-settings = {
-	address    = "localhost:6600"
-	password   = "<your password>"
-	root       = "~/Music"
-}
-colors = {
-	normal      = ""
-	highlight   = "bold"
-	elapsed     = "reverse"
-	remains     = "ul"
-	tab_bar     = "reverse"
-	tab_active  = "ul"
-	even        = ""
-	odd         = ""
-	selection   = "reverse"
-	multiselect = "-1 6"
-	scrollbar   = ""
-}
-streams = {
-	"dnbradio.com" = "http://www.dnbradio.com/hi.m3u"
-	"BassDrive.com" = "http://bassdrive.com/v2/streams/BassDrive.pls"
-}
-....
 
 Terminal caveats
 ----------------
