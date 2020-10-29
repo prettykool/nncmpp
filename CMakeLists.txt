@@ -47,6 +47,12 @@ include (CheckFunctionExists)
 set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
 CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
 
+if ("${CMAKE_SYSTEM_NAME}" MATCHES "BSD")
+	# Need this for SIGWINCH in FreeBSD and OpenBSD respectively;
+	# our POSIX version macros make it undefined
+	add_definitions (-D__BSD_VISIBLE=1 -D_BSD_SOURCE=1)
+endif ()
+
 # Generate a configuration file
 configure_file (${PROJECT_SOURCE_DIR}/config.h.in
 	${PROJECT_BINARY_DIR}/config.h)
