@@ -68,6 +68,7 @@ add_threads (${PROJECT_NAME})
 include (GNUInstallDirs)
 install (TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install (FILES LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install (DIRECTORY contrib DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
 
 # Generate documentation from program help
 find_program (HELP2MAN_EXECUTABLE help2man)
