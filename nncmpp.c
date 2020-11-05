@@ -741,6 +741,8 @@ static struct config_schema g_config_settings[] =
 	{ .name      = "password",
 	  .comment   = "Password to use for MPD authentication",
 	  .type      = CONFIG_ITEM_STRING },
+
+	// NOTE: this is unused--in theory we could allow manual metadata adjustment
 	{ .name      = "root",
 	  .comment   = "Where all the files MPD is playing are located",
 	  .type      = CONFIG_ITEM_STRING },
@@ -4028,7 +4030,7 @@ main (int argc, char *argv[])
 	};
 
 	struct opt_handler oh =
-		opt_handler_make (argc, argv, opts, NULL, "MPD client.");
+		opt_handler_make (argc, argv, opts, NULL, "Terminal-based MPD client.");
 
 	int c;
 	while ((c = opt_handler_get (&oh)) != -1)
