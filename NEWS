@@ -1,3 +1,9 @@
+1.1.0 (20xx-xx-xx)
+
+ * Now requesting and processing terminal de/focus events,
+   using a new "defocused" attribute for selected rows
+
+
 1.0.0 (2020-11-05)
 
  * Coming with a real manual page instead of a help2man-generated stub

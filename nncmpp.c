@@ -1,7 +1,7 @@
 /*
  * nncmpp -- the MPD client you never knew you needed
  *
- * Copyright (c) 2016 - 2020, Přemysl Eric Janouch <p@janouch.name>
+ * Copyright (c) 2016 - 2021, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -39,6 +39,8 @@
 	 * Can't use A_REVERSE because bold'd be bright.
 	 * Unfortunately ran out of B&W attributes.       */ \
 	XX( MULTISELECT, multiselect,  -1,  6, 0           ) \
+	/* This ought to be indicative enough.            */ \
+	XX( DEFOCUSED,   defocused,    -1, -1, A_UNDERLINE ) \
 	XX( SCROLLBAR,   scrollbar,    -1, -1, 0           ) \
 	/* These are for debugging only                   */ \
 	XX( WARNING,     warning,       3, -1, 0           ) \
@@ -682,6 +684,7 @@ static struct app_context
 	struct poller_timer tk_timer;       ///< termo timeout timer
 	bool locale_is_utf8;                ///< The locale is Unicode
 	bool use_partial_boxes;             ///< Use Unicode box drawing chars
+	bool focused;                       ///< Whether the terminal has focus
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
@@ -909,6 +912,9 @@ app_init_context (void)
 	// It doesn't work 100% (e.g. incompatible with undelining in urxvt)
 	// TODO: make this configurable
 	g.use_partial_boxes = g.locale_is_utf8;
+
+	// Presumably, although not necessarily; unsure if queryable at all
+	g.focused = true;
 
 	app_init_attributes ();
 }
@@ -1338,11 +1344,13 @@ app_draw_view (void)
 
 		bool override_colors = true;
 		if (item_index == tab->item_selected)
-			row_attrs = APP_ATTR (SELECTION);
+			row_attrs = g.focused
+				? APP_ATTR (SELECTION) : APP_ATTR (DEFOCUSED);
 		else if (tab->item_mark > -1 &&
 		   ((item_index >= tab->item_mark && item_index <= tab->item_selected)
 		 || (item_index >= tab->item_selected && item_index <= tab->item_mark)))
-			row_attrs = APP_ATTR (MULTISELECT);
+			row_attrs = g.focused
+				? APP_ATTR (MULTISELECT) : APP_ATTR (DEFOCUSED);
 		else
 			override_colors = false;
 
@@ -2223,6 +2231,12 @@ app_init_bindings (const char *keymap,
 static bool
 app_process_termo_event (termo_key_t *event)
 {
+	if (event->type == TERMO_TYPE_FOCUS)
+	{
+		g.focused = !!event->code.focused;
+		app_invalidate ();
+	}
+
 	struct binding dummy = { *event, 0, 0 }, *binding;
 	if (g.editor.line)
 	{
