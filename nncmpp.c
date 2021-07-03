@@ -95,6 +95,13 @@ enum
 
 #include <curl/curl.h>
 
+// The spectrum analyser requires a DFT transform.  The FFTW library is fairly
+// efficient, and doesn't have a requirement on the number of bins.
+
+#ifdef WITH_FFTW
+#include <fftw3.h>
+#endif  // WITH_FFTW
+
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
 // --- Utilities ---------------------------------------------------------------
@@ -560,6 +567,273 @@ item_list_resize (struct item_list *self, size_t len)
 	self->len = len;
 }
 
+// --- Spectrum analyzer -------------------------------------------------------
+
+#ifdef WITH_FFTW
+
+struct spectrum
+{
+	int sampling_rate;                  ///< Number of samples per seconds
+	int channels;                       ///< Number of sampled channels
+	int bits;                           ///< Number of bits per sample
+	int bars;                           ///< Number of output vertical bars
+
+	int bins;                           ///< Number of DFT bins
+	int useful_bins;                    ///< Bins up to the Nyquist frequency
+	int samples;                        ///< Number of windows to average
+	float accumulator_scale;            ///< Scaling factor for accum. values
+	int *top_bins;                      ///< Top DFT bin index for each bar
+	char *spectrum;                     ///< String buffer for the "render"
+
+	void *buffer;                       ///< Input buffer
+	size_t buffer_len;                  ///< Input buffer fill level
+	size_t buffer_size;                 ///< Input buffer size
+
+	/// Decode the respective part of the buffer into the last 1/3 of data
+	void (*decode) (struct spectrum *, int sample);
+
+	float *data;                        ///< Normalized audio data
+	float *window;                      ///< Sampled window function
+	float *windowed;                    ///< data * window
+	fftwf_complex *out;                 ///< DFT output
+	fftwf_plan p;                       ///< DFT plan/FFTW configuration
+	float *accumulator;                 ///< Accumulated powers of samples
+};
+
+// - - Windows - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// Out: float[n] of 0..1
+static void
+window_hann (float *coefficients, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+	{
+		float sine = sin (M_PI * i / n);
+		coefficients[i] = sine * sine;
+	}
+}
+
+// In: float[n] of -1..1, float[n] of 0..1; out: float[n] of -1..1
+static void
+window_apply (const float *in, const float *coefficients, float *out, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+		out[i] = in[i] * coefficients[i];
+}
+
+// In: float[n] of 0..1; out: float 0..n, describing the coherent gain
+static float
+window_coherent_gain (const float *in, size_t n)
+{
+	float sum = 0;
+	for (size_t i = 0; i < n; i++)
+		sum += in[i];
+	return sum;
+}
+
+// - - Decoding  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+spectrum_decode_8 (struct spectrum *s, int sample)
+{
+	size_t n = s->useful_bins;
+	float *data = s->data + n;
+	int8_t *p = (int8_t *) s->buffer + sample * n * s->channels;
+	while (n--)
+	{
+		int32_t acc = 0;
+		for (int ch = 0; ch < s->channels; ch++)
+			acc += *p++;
+		*data++ = (float) acc / -INT8_MIN / s->channels;
+	}
+}
+
+static void
+spectrum_decode_16 (struct spectrum *s, int sample)
+{
+	size_t n = s->useful_bins;
+	float *data = s->data + n;
+	int16_t *p = (int16_t *) s->buffer + sample * n * s->channels;
+	while (n--)
+	{
+		int32_t acc = 0;
+		for (int ch = 0; ch < s->channels; ch++)
+			acc += *p++;
+		*data++ = (float) acc / -INT16_MIN / s->channels;
+	}
+}
+
+// - - Spectrum analysis - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static const char *spectrum_bars[] =
+	{ " ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
+
+/// Assuming the input buffer is full, updates the rendered spectrum
+static void
+spectrum_sample (struct spectrum *s)
+{
+	memset (s->accumulator, 0, sizeof *s->accumulator * s->useful_bins);
+
+	// Credit for the algorithm goes to Audacity's /src/SpectrumAnalyst.cpp,
+	// apparently Welch's method
+	for (int sample = 0; sample < s->samples; sample++)
+	{
+		// We use 50% overlap and start with data from the last run (if any)
+		memmove (s->data, s->data + s->useful_bins,
+			sizeof *s->data * s->useful_bins);
+		s->decode (s, sample);
+
+		window_apply (s->data, s->window, s->windowed, s->bins);
+		fftwf_execute (s->p);
+
+		for (int bin = 0; bin < s->useful_bins; bin++)
+		{
+			// out[0][0] is the DC component, not useful to us
+			float re = s->out[bin + 1][0];
+			float im = s->out[bin + 1][1];
+			s->accumulator[bin] += re * re + im * im;
+		}
+	}
+
+	int last_bin = 0;
+	char *p = s->spectrum;
+	for (int bar = 0; bar < s->bars; bar++)
+	{
+		int top_bin = s->top_bins[bar];
+
+		// Think of this as accumulating energies within bands,
+		// so that it matches our non-linear hearing--there's no averaging.
+		// For more precision, we could employ an "equal loudness contour".
+		float acc = 0;
+		for (int bin = last_bin; bin < top_bin; bin++)
+			acc += s->accumulator[bin];
+
+		last_bin = top_bin;
+		float db = 10 * log10f (acc * s->accumulator_scale);
+		if (db > 0)
+			db = 0;
+
+		// Assuming decibels are always negative (i.e., properly normalized).
+		// The division defines the cutoff: 9 * 7 = 63 dB of range.
+		int height = N_ELEMENTS (spectrum_bars) - 1 + (int) (db / 7);
+		p += strlen (strcpy (p, spectrum_bars[MAX (height, 0)]));
+	}
+}
+
+static bool
+spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
+{
+	errno = 0;
+
+	long sampling_rate, bits, channels;
+	if (!format
+	 || (sampling_rate = strtol (format, &format, 10), *format++ != ':')
+	 || (bits          = strtol (format, &format, 10), *format++ != ':')
+	 || (channels      = strtol (format, &format, 10), *format)
+	 || errno != 0)
+		return error_set (e, "invalid format, expected RATE:BITS:CHANNELS");
+
+	if (sampling_rate < 20000 || sampling_rate > INT_MAX)
+		return error_set (e, "unsupported sampling rate (%ld)", sampling_rate);
+	if (bits != 8 && bits != 16)
+		return error_set (e, "unsupported bit count (%ld)", bits);
+	if (channels < 1 || channels > INT_MAX)
+		return error_set (e, "no channels to sample (%ld)", channels);
+	if (bars < 1 || bars > 12)
+		return error_set (e, "requested too few or too many bars (%d)", bars);
+
+	// All that can fail henceforth is memory allocation
+	*s = (struct spectrum)
+	{
+		.sampling_rate = sampling_rate,
+		.bits          = bits,
+		.channels      = channels,
+		.bars          = bars,
+	};
+
+	// The number of bars is always smaller than that of the samples (bins).
+	// Let's start with the equation of the top FFT bin to use for a given bar:
+	//   top_bin = (num_bins + 1) ^ (bar / num_bars) - 1
+	// N.b. if we didn't subtract, the power function would make this ≥ 1.
+	// N.b. we then also need to extend the range by the same amount.
+	//
+	// We need the amount of bins for the first bar to be at least one:
+	//         1 ≤ (num_bins + 1) ^   (1 / num_bars) - 1
+	//
+	// Solving with Wolfram Alpha gives us:
+	//   num_bins ≥ (2 ^ num_bars) - 1  [for y > 0]
+	//
+	// And we need to remember that half of the FFT bins are useless/missing--
+	// FFTW skips useless points past the Nyquist frequency.
+	int necessary_bins = 2 << s->bars;
+
+	// Discard frequencies above 20 kHz, which take up a constant ratio
+	// of all bins, given by the sampling rate.  A more practical/efficient
+	// solution would be to just handle 96/192/... kHz as bitshifts.
+	//
+	// Trying to filter out sub-20 Hz frequencies would be even more wasteful.
+	double audible_ratio = s->sampling_rate / 2. / 20000;
+	s->bins = ceil (necessary_bins * MAX (audible_ratio, 1));
+	s->useful_bins = s->bins / 2;
+
+	int used_bins = necessary_bins / 2;
+	s->spectrum = xcalloc (sizeof *s->spectrum, s->bars * 3 + 1);
+	s->top_bins = xcalloc (sizeof *s->top_bins, s->bars);
+	for (int bar = 0; bar < s->bars; bar++)
+	{
+		int top_bin = floor (pow (used_bins + 1, (bar + 1.) / s->bars)) - 1;
+		s->top_bins[bar] = MIN (top_bin, used_bins);
+	}
+
+	// Limit updates to 30 times per second to limit CPU load
+	s->samples = s->sampling_rate / s->bins * 2 / 30;
+	if (s->samples < 1)
+		s->samples = 1;
+
+	if (s->bits == 8)   s->decode = spectrum_decode_8;
+	if (s->bits == 16)  s->decode = spectrum_decode_16;
+
+	s->buffer_size = s->samples * s->useful_bins * s->bits / 8 * s->channels;
+	s->buffer = xcalloc (1, s->buffer_size);
+
+	// Prepare the window
+	s->window = xcalloc (sizeof *s->window, s->bins);
+	window_hann (s->window, s->bins);
+
+	// Multiply by 2 for only using half of the DFT's result, then adjust to
+	// the total energy of the window.  Both squared, because the accumulator
+	// contains squared values.  Compute the average, and convert to decibels.
+	// See also the mildly confusing https://dsp.stackexchange.com/a/14945.
+	float coherent_gain = window_coherent_gain (s->window, s->bins);
+	s->accumulator_scale = 2 * 2 / coherent_gain / coherent_gain / s->samples;
+
+	s->data = xcalloc (sizeof *s->data, s->bins);
+	s->windowed = fftw_malloc (sizeof *s->windowed * s->bins);
+	s->out = fftw_malloc (sizeof *s->out * (s->useful_bins + 1));
+	s->p = fftwf_plan_dft_r2c_1d (s->bins, s->windowed, s->out, FFTW_MEASURE);
+	s->accumulator = xcalloc (sizeof *s->accumulator, s->useful_bins);
+	return true;
+}
+
+static void
+spectrum_free (struct spectrum *s)
+{
+	free (s->accumulator);
+	fftwf_destroy_plan (s->p);
+	fftw_free (s->out);
+	fftw_free (s->windowed);
+	free (s->data);
+	free (s->window);
+
+	free (s->spectrum);
+	free (s->top_bins);
+	free (s->buffer);
+
+	memset (s, 0, sizeof *s);
+}
+
+#endif  // WITH_FFTW
+
 // --- Application -------------------------------------------------------------
 
 // Function names are prefixed mostly because of curses which clutters the
@@ -675,6 +949,13 @@ static struct app_context
 	int gauge_offset;                   ///< Offset to the gauge or -1
 	int gauge_width;                    ///< Width of the gauge, if present
 
+#ifdef WITH_FFTW
+	struct spectrum spectrum;           ///< Spectrum analyser
+	int spectrum_fd;                    ///< FIFO file descriptor (non-blocking)
+	int spectrum_column, spectrum_row;  ///< Position for fast refresh
+	struct poller_fd spectrum_event;    ///< FIFO watcher
+#endif  // WITH_FFTW
+
 	struct line_editor editor;          ///< Line editor
 	struct poller_idle refresh_event;   ///< Refresh the screen
 
@@ -749,6 +1030,22 @@ static struct config_schema g_config_settings[] =
 	{ .name      = "root",
 	  .comment   = "Where all the files MPD is playing are located",
 	  .type      = CONFIG_ITEM_STRING },
+
+#ifdef WITH_FFTW
+	{ .name      = "spectrum_path",
+	  .comment   = "Visualizer feed path to a FIFO audio output",
+	  .type      = CONFIG_ITEM_STRING },
+	// MPD's "outputs" command doesn't include this information
+	{ .name      = "spectrum_format",
+	  .comment   = "Visualizer feed data format",
+	  .type      = CONFIG_ITEM_STRING,
+	  .default_  = "\"44100:16:2\"" },
+	// 10 is about the useful limit, then it gets too computationally expensive
+	{ .name      = "spectrum_bars",
+	  .comment   = "Number of computed audio spectrum bars",
+	  .type      = CONFIG_ITEM_INTEGER,
+	  .default_  = "8" },
+#endif  // WITH_FFTW
 
 	// Disabling this minimises MPD traffic and has the following caveats:
 	//  - when MPD stalls on retrieving audio data, we keep ticking
@@ -904,6 +1201,11 @@ app_init_context (void)
 	g.playback_info = str_map_make (free);
 	g.playback_info.key_xfrm = tolower_ascii_strxfrm;
 
+#ifdef WITH_FFTW
+	g.spectrum_fd = -1;
+	g.spectrum_row = g.spectrum_column = -1;
+#endif  // WITH_FFTW
+
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
 	// Note that non-Unicode locales are handled pretty inefficiently.
@@ -956,6 +1258,15 @@ app_free_context (void)
 	str_map_free (&g.playback_info);
 	strv_free (&g.streams);
 	item_list_free (&g.playlist);
+
+#ifdef WITH_FFTW
+	spectrum_free (&g.spectrum);
+	if (g.spectrum_fd != -1)
+	{
+		poller_fd_reset (&g.spectrum_event);
+		xclose (g.spectrum_fd);
+	}
+#endif  // WITH_FFTW
 
 	line_editor_free (&g.editor);
 
@@ -1218,6 +1529,21 @@ app_draw_header (void)
 	g.tabs_offset = g.header_height;
 	LIST_FOR_EACH (struct tab, iter, g.tabs)
 		row_buffer_append (&buf, iter->name, attrs[iter == g.active_tab]);
+
+#ifdef WITH_FFTW
+	// This seems like the most reasonable, otherwise unoccupied space
+	if (g.spectrum_fd != -1)
+	{
+		// Find some space and remember where it was, for fast refreshes
+		row_buffer_ellipsis (&buf, COLS - g.spectrum.bars - 1);
+		row_buffer_align (&buf, COLS - g.spectrum.bars, attrs[false]);
+		g.spectrum_row = g.header_height;
+		g.spectrum_column = buf.total_width;
+
+		row_buffer_append (&buf, g.spectrum.spectrum, attrs[false]);
+	}
+#endif  // WITH_FFTW
+
 	app_flush_header (&buf, attrs[false]);
 
 	const char *header = g.active_tab->header;
@@ -3421,6 +3747,137 @@ debug_tab_init (void)
 	return super;
 }
 
+// --- Spectrum analyser -------------------------------------------------------
+
+#ifdef WITH_FFTW
+
+static void
+spectrum_redraw (void)
+{
+	// A full refresh would be too computationally expensive,
+	// let's hack around it in this case
+	if (g.spectrum_row != -1)
+	{
+		attrset (APP_ATTR (TAB_BAR));
+		mvaddstr (g.spectrum_row, g.spectrum_column, g.spectrum.spectrum);
+		attrset (0);
+		refresh ();
+	}
+	else
+		app_invalidate ();
+}
+
+// When any problem occurs with the FIFO, we'll just give up on it completely
+static void
+spectrum_discard_fifo (void)
+{
+	if (g.spectrum_fd != -1)
+	{
+		poller_fd_reset (&g.spectrum_event);
+		xclose (g.spectrum_fd);
+		g.spectrum_fd = -1;
+
+		spectrum_free (&g.spectrum);
+		g.spectrum_row = g.spectrum_column = -1;
+		app_invalidate ();
+	}
+}
+
+static void
+spectrum_on_fifo_readable (const struct pollfd *pfd, void *user_data)
+{
+	(void) user_data;
+	struct spectrum *s = &g.spectrum;
+
+	bool update = false;
+	ssize_t n;
+restart:
+	while ((n = read (pfd->fd,
+		s->buffer + s->buffer_len, s->buffer_size - s->buffer_len)) > 0)
+		if ((s->buffer_len += n) == s->buffer_size)
+		{
+			update = true;
+			spectrum_sample (s);
+			s->buffer_len = 0;
+		}
+
+	if (!n)
+		spectrum_discard_fifo ();
+	else if (errno == EINTR)
+		goto restart;
+	else if (errno != EAGAIN)
+	{
+		print_error ("spectrum: %s", strerror (errno));
+		spectrum_discard_fifo ();
+	}
+	else if (update)
+		spectrum_redraw ();
+}
+
+// When playback is stopped, we need to feed the analyser some zeroes ourselves.
+// We could also just hide it.  Hard to say which is simpler or better.
+static void
+spectrum_clear (void)
+{
+	if (g.spectrum_fd != -1)
+	{
+		struct spectrum *s = &g.spectrum;
+		memset (s->buffer, 0, s->buffer_size);
+		spectrum_sample (s);
+		spectrum_sample (s);
+		s->buffer_len = 0;
+
+		spectrum_redraw ();
+	}
+}
+
+static void
+spectrum_setup_fifo (void)
+{
+	const char *spectrum_path =
+		get_config_string (g.config.root, "settings.spectrum_path");
+	const char *spectrum_format =
+		get_config_string (g.config.root, "settings.spectrum_format");
+	struct config_item *spectrum_bars =
+		config_item_get (g.config.root, "settings.spectrum_bars", NULL);
+	if (!spectrum_path)
+		return;
+
+	struct error *e = NULL;
+	char *path = resolve_filename
+		(spectrum_path, resolve_relative_config_filename);
+
+	if (!path)
+		print_error ("spectrum: %s", "FIFO path could not be resolved");
+	else if (!g.locale_is_utf8)
+		print_error ("spectrum: %s", "UTF-8 locale required");
+	else if (!spectrum_init (&g.spectrum,
+		(char *) spectrum_format, spectrum_bars->value.integer, &e))
+	{
+		print_error ("spectrum: %s", e->message);
+		error_free (e);
+	}
+	else if ((g.spectrum_fd = open (path, O_RDONLY | O_NONBLOCK)) == -1)
+	{
+		print_error ("spectrum: %s: %s", path, strerror (errno));
+		spectrum_free (&g.spectrum);
+	}
+	else
+	{
+		g.spectrum_event = poller_fd_make (&g.poller, g.spectrum_fd);
+		g.spectrum_event.dispatcher = spectrum_on_fifo_readable;
+		poller_fd_set (&g.spectrum_event, POLLIN);
+	}
+
+	free (path);
+}
+
+#else  // ! WITH_FFTW
+#define spectrum_setup_fifo()
+#define spectrum_clear()
+#define spectrum_discard_fifo()
+#endif  // ! WITH_FFTW
+
 // --- MPD interface -----------------------------------------------------------
 
 static void
@@ -3481,6 +3938,9 @@ mpd_update_playback_state (void)
 		if (!strcmp (state, "play"))   g.state = PLAYER_PLAYING;
 		if (!strcmp (state, "pause"))  g.state = PLAYER_PAUSED;
 	}
+
+	if (g.state == PLAYER_STOPPED)
+		spectrum_clear ();
 
 	// Values in "time" are always rounded.  "elapsed", introduced in MPD 0.16,
 	// is in millisecond precision and "duration" as well, starting with 0.20.
@@ -3736,6 +4196,8 @@ mpd_on_connected (void *user_data)
 		mpd_request_info ();
 		library_tab_reload (NULL);
 	}
+
+	spectrum_setup_fifo ();
 }
 
 static void
@@ -3752,6 +4214,8 @@ mpd_on_failure (void *user_data)
 	mpd_update_playback_state ();
 	current_tab_update ();
 	info_tab_update ();
+
+	spectrum_discard_fifo ();
 }
 
 static void

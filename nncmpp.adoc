@@ -55,6 +55,7 @@ colors = {
 	odd         = ""
 	selection   = "reverse"
 	multiselect = "-1 6"
+	defocused   = "ul"
 	scrollbar   = ""
 }
 streams = {
@@ -69,6 +70,27 @@ schemes in the _contrib_ directory.
 
 // TODO: it seems like liberty should contain an includable snippet about
 //   the format, which could form a part of nncmpp.conf(5).
+
+Spectrum visualiser
+-------------------
+When built against the FFTW library, *nncmpp* can make use of MPD's "fifo"
+output plugin to show the audio spectrum.  This has some caveats, namely that
+it may not be properly synchronized, only one instance of a client can read from
+a given named pipe at a time, it will cost you some CPU time, and finally you'll
+need to set it up manually to match your MPD configuration, e.g.:
+
+....
+settings = {
+	...
+	spectrum_path = "~/.mpd/mpd.fifo"  # "path"
+	spectrum_format = "44100:16:2"     # "format" (samplerate:bits:channels)
+	spectrum_bars = 8                  # beware of exponential complexity
+	...
+}
+....
+
+The sample rate should be greater than 40 kHz, the number of bits 8 or 16,
+and the number of channels doesn't matter, as they're simply averaged together.
 
 Files
 -----

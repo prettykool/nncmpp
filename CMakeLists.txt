@@ -21,7 +21,6 @@ include (AddThreads)
 find_package (Termo QUIET NO_MODULE)
 option (USE_SYSTEM_TERMO
 	"Don't compile our own termo library, use the system one" ${Termo_FOUND})
-
 if (USE_SYSTEM_TERMO)
 	if (NOT Termo_FOUND)
 		message (FATAL_ERROR "System termo library not found")
@@ -38,9 +37,18 @@ else ()
 	set (Termo_LIBRARIES termo-static)
 endif ()
 
+pkg_check_modules (fftw fftw3 fftw3f)
+option (WITH_FFTW "Use FFTW to enable spectrum visualisation" ${fftw_FOUND})
+if (WITH_FFTW)
+	if (NOT fftw_FOUND)
+		message (FATAL_ERROR "FFTW not found")
+	endif()
+endif ()
+
 include_directories (${Unistring_INCLUDE_DIRS}
-	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS} ${curl_INCLUDE_DIRS})
-link_directories (${curl_LIBRARY_DIRS})
+	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS} ${curl_INCLUDE_DIRS}
+	${fftw_INCLUDE_DIRS})
+link_directories (${curl_LIBRARY_DIRS} ${fftw_LIBRARY_DIRS})
 
 # Configuration
 include (CheckFunctionExists)
@@ -53,6 +61,14 @@ if ("${CMAKE_SYSTEM_NAME}" MATCHES "BSD")
 	add_definitions (-D__BSD_VISIBLE=1 -D_BSD_SOURCE=1)
 endif ()
 
+# -lm may or may not be a part of libc
+foreach (extra m)
+	find_library (extra_lib_${extra} ${extra})
+	if (extra_lib_${extra})
+		list (APPEND extra_libraries ${extra_lib_${extra}})
+	endif ()
+endforeach ()
+
 # Generate a configuration file
 configure_file (${PROJECT_SOURCE_DIR}/config.h.in
 	${PROJECT_BINARY_DIR}/config.h)
@@ -61,7 +77,8 @@ include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 # Build the main executable and link it
 add_executable (${PROJECT_NAME} ${PROJECT_NAME}.c)
 target_link_libraries (${PROJECT_NAME} ${Unistring_LIBRARIES}
-	${Ncursesw_LIBRARIES} termo-static ${curl_LIBRARIES})
+	${Ncursesw_LIBRARIES} termo-static ${curl_LIBRARIES}
+	${fftw_LIBRARIES} ${extra_libraries})
 add_threads (${PROJECT_NAME})
 
 # Installation

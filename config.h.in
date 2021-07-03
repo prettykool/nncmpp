@@ -5,6 +5,7 @@
 #define PROGRAM_VERSION "${PROJECT_VERSION}"
 
 #cmakedefine HAVE_RESIZETERM
+#cmakedefine WITH_FFTW
 
 #endif  // ! CONFIG_H
 

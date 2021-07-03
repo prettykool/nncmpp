@@ -3,6 +3,8 @@
  * Now requesting and processing terminal de/focus events,
    using a new "defocused" attribute for selected rows
 
+ * Made it possible to show a spectrum visualiser when built against FFTW
+
 
 1.0.0 (2020-11-05)
 
