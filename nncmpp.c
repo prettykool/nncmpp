@@ -85,8 +85,8 @@ enum
 // ncurses is notoriously retarded for input handling, we need something
 // different if only to receive mouse events reliably.
 //
-// 2020 update: ncurses is mostly reliable now but rxvt-unicode needs to start
-// supporting 1006, or ncurses needs to start supporting the 1015 mode.
+// 2021 update: ncurses is mostly reliable now, though rxvt-unicode only
+// supports the 1006 mode that ncurses also supports mode starting with 9.25.
 
 #include "termo.h"
 
