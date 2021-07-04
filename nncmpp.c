@@ -3938,9 +3938,10 @@ mpd_update_playback_state (void)
 		if (!strcmp (state, "play"))   g.state = PLAYER_PLAYING;
 		if (!strcmp (state, "pause"))  g.state = PLAYER_PAUSED;
 	}
-
 	if (g.state == PLAYER_STOPPED)
+	{
 		spectrum_clear ();
+	}
 
 	// Values in "time" are always rounded.  "elapsed", introduced in MPD 0.16,
 	// is in millisecond precision and "duration" as well, starting with 0.20.
