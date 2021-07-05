@@ -769,9 +769,18 @@ spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
 
 	// Discard frequencies above 20 kHz, which take up a constant ratio
 	// of all bins, given by the sampling rate.  A more practical/efficient
-	// solution would be to just handle 96/192/... kHz as bitshifts.
+	// solution would be to just handle 96/192/... kHz rates as bitshifts.
 	//
-	// Trying to filter out sub-20 Hz frequencies would be even more wasteful.
+	// Filtering out sub-20 Hz frequencies would be even more wasteful than
+	// this wild DFT size, so we don't even try.  While we may just shift
+	// the lowest used bin easily within the extra range provided by this
+	// extension (the Nyquist is usually above 22 kHz, and it hardly matters
+	// if we go a bit beyond 20 kHz in the last bin), for a small number of bars
+	// the first bin already includes audible frequencies, and even for larger
+	// numbers it wouldn't be too accurate.  An exact solution would require
+	// having the amount of bins be strictly a factor of Nyquist / 20 (stemming
+	// from the equation 20 = Nyquist / bins).  Since log2(44100 / 2 / 20) > 10,
+	// it would be fairly expensive, and somewhat slowly updating.  Always.
 	double audible_ratio = s->sampling_rate / 2. / 20000;
 	s->bins = ceil (necessary_bins * MAX (audible_ratio, 1));
 	s->useful_bins = s->bins / 2;
