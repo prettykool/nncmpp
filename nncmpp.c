@@ -781,6 +781,7 @@ spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
 	// having the amount of bins be strictly a factor of Nyquist / 20 (stemming
 	// from the equation 20 = Nyquist / bins).  Since log2(44100 / 2 / 20) > 10,
 	// it would be fairly expensive, and somewhat slowly updating.  Always.
+	// (Note that you can increase window overlap to get smoother framerates.)
 	double audible_ratio = s->sampling_rate / 2. / 20000;
 	s->bins = ceil (necessary_bins * MAX (audible_ratio, 1));
 	s->useful_bins = s->bins / 2;
