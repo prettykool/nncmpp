@@ -589,7 +589,7 @@ struct spectrum
 	size_t buffer_len;                  ///< Input buffer fill level
 	size_t buffer_size;                 ///< Input buffer size
 
-	/// Decode the respective part of the buffer into the last 1/3 of data
+	/// Decode the respective part of the buffer into the second half of data
 	void (*decode) (struct spectrum *, int sample);
 
 	float *data;                        ///< Normalized audio data
