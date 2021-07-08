@@ -638,13 +638,13 @@ spectrum_decode_8 (struct spectrum *s, int sample)
 {
 	size_t n = s->useful_bins;
 	float *data = s->data + n;
-	int8_t *p = (int8_t *) s->buffer + sample * n * s->channels;
-	while (n--)
+	for (int8_t *p = (int8_t *) s->buffer + sample * n * s->channels;
+		n--; p += s->channels)
 	{
 		int32_t acc = 0;
 		for (int ch = 0; ch < s->channels; ch++)
-			acc += *p++;
-		*data++ = (float) acc / -INT8_MIN / s->channels;
+			acc += p[ch];
+		*data++ = (float) acc / s->channels / -INT8_MIN;
 	}
 }
 
@@ -653,14 +653,23 @@ spectrum_decode_16 (struct spectrum *s, int sample)
 {
 	size_t n = s->useful_bins;
 	float *data = s->data + n;
-	int16_t *p = (int16_t *) s->buffer + sample * n * s->channels;
-	while (n--)
+	for (int16_t *p = (int16_t *) s->buffer + sample * n * s->channels;
+		n--; p += s->channels)
 	{
 		int32_t acc = 0;
 		for (int ch = 0; ch < s->channels; ch++)
-			acc += *p++;
-		*data++ = (float) acc / -INT16_MIN / s->channels;
+			acc += p[ch];
+		*data++ = (float) acc / s->channels / -INT16_MIN;
 	}
+}
+
+static void
+spectrum_decode_16_2 (struct spectrum *s, int sample)
+{
+	size_t n = s->useful_bins;
+	float *data = s->data + n;
+	for (int16_t *p = (int16_t *) s->buffer + sample * n * 2; n--; p += 2)
+		*data++ = ((int32_t) p[0] + p[1]) / 2. / -INT16_MIN;
 }
 
 // - - Spectrum analysis - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -802,6 +811,10 @@ spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
 
 	if (s->bits == 8)   s->decode = spectrum_decode_8;
 	if (s->bits == 16)  s->decode = spectrum_decode_16;
+
+	// Micro-optimize to achieve some piece of mind; it's weak but measurable
+	if (s->bits == 16 && s->channels == 2)
+		s->decode = spectrum_decode_16_2;
 
 	s->buffer_size = s->samples * s->useful_bins * s->bits / 8 * s->channels;
 	s->buffer = xcalloc (1, s->buffer_size);
