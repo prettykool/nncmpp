@@ -569,6 +569,9 @@ item_list_resize (struct item_list *self, size_t len)
 
 // --- Spectrum analyzer -------------------------------------------------------
 
+// See http://www.zytrax.com/tech/audio/equalization.html
+// for a good write-up about this problem domain
+
 #ifdef WITH_FFTW
 
 struct spectrum
@@ -809,6 +812,7 @@ spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
 	if (s->samples < 1)
 		s->samples = 1;
 
+	// XXX: we average the channels but might want to average the DFT results
 	if (s->bits == 8)   s->decode = spectrum_decode_8;
 	if (s->bits == 16)  s->decode = spectrum_decode_16;
 
