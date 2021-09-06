@@ -1254,9 +1254,9 @@ app_init_terminal (void)
 {
 	TERMO_CHECK_VERSION;
 	if (!(g.tk = termo_new (STDIN_FILENO, NULL, 0)))
-		abort ();
+		exit_fatal ("failed to set up the terminal");
 	if (!initscr () || nonl () == ERR)
-		abort ();
+		exit_fatal ("failed to set up the terminal");
 
 	// By default we don't use any colors so they're not required...
 	if (start_color () == ERR
@@ -4574,9 +4574,9 @@ main (int argc, char *argv[])
 
 	app_init_context ();
 	app_load_configuration ();
-	app_init_terminal ();
 	signals_setup_handlers ();
 	app_init_poller_events ();
+	app_init_terminal ();
 
 	g_normal_keys = app_init_bindings ("normal",
 		g_normal_defaults, N_ELEMENTS (g_normal_defaults), &g_normal_keys_len);
