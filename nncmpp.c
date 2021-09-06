@@ -4187,6 +4187,14 @@ mpd_queue_reconnect (void)
 }
 
 static void
+mpd_on_ready (struct mpd_client *c)
+{
+	mpd_request_info ();
+	library_tab_reload (NULL);
+	spectrum_setup_fifo ();
+}
+
+static void
 mpd_on_password_response (const struct mpd_response *response,
 	const struct strv *data, void *user_data)
 {
@@ -4195,10 +4203,7 @@ mpd_on_password_response (const struct mpd_response *response,
 	struct mpd_client *c = &g.client;
 
 	if (response->success)
-	{
-		mpd_request_info ();
-		library_tab_reload (NULL);
-	}
+		mpd_on_ready (c);
 	else
 	{
 		print_error ("%s: %s",
@@ -4221,12 +4226,7 @@ mpd_on_connected (void *user_data)
 		mpd_client_add_task (c, mpd_on_password_response, NULL);
 	}
 	else
-	{
-		mpd_request_info ();
-		library_tab_reload (NULL);
-	}
-
-	spectrum_setup_fifo ();
+		mpd_on_ready (c);
 }
 
 static void
