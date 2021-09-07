@@ -10,7 +10,7 @@ nncmpp - terminal-based MPD client
 
 Synopsis
 --------
-*nncmpp* [_OPTION_]...
+*nncmpp* [_OPTION_]... [_URL_ | _PATH_]...
 
 Description
 -----------
@@ -18,6 +18,10 @@ Description
 you with an overview of all key bindings and the actions they're assigned to.
 Individual tabs can be switched to either using the mouse or by pressing *M-1*
 through *M-9*, corresponding to the order they appear in.
+
+As a convenience utility, any program arguments are added to the MPD queue.
+Note that to add files outside the database, you need to connect to MPD using
+a socket file.
 
 Options
 -------

@@ -962,6 +962,7 @@ static struct app_context
 
 	struct config config;               ///< Program configuration
 	struct strv streams;                ///< List of "name NUL URI NUL"
+	struct strv enqueue;                ///< Items to enqueue once connected
 
 	struct tab *help_tab;               ///< Special help tab
 	struct tab *tabs;                   ///< All other tabs
@@ -1224,6 +1225,7 @@ app_init_context (void)
 	g.client = mpd_client_make (&g.poller);
 	g.config = config_make ();
 	g.streams = strv_make ();
+	g.enqueue = strv_make ();
 	g.playlist = item_list_make ();
 
 	g.playback_info = str_map_make (free);
@@ -1285,6 +1287,7 @@ app_free_context (void)
 	mpd_client_free (&g.client);
 	str_map_free (&g.playback_info);
 	strv_free (&g.streams);
+	strv_free (&g.enqueue);
 	item_list_free (&g.playlist);
 
 #ifdef WITH_FFTW
@@ -4186,12 +4189,55 @@ mpd_queue_reconnect (void)
 	poller_timer_set (&g.connect_event, 5 * 1000);
 }
 
+// On an error, MPD discards the rest of our enqueuing commands--work it around
+static void mpd_enqueue_step (size_t start_offset);
+
 static void
-mpd_on_ready (struct mpd_client *c)
+mpd_on_enqueue_response (const struct mpd_response *response,
+	const struct strv *data, void *user_data)
+{
+	(void) data;
+	intptr_t start_offset = (intptr_t) user_data;
+
+	if (response->success)
+		strv_reset (&g.enqueue);
+	else
+	{
+		// Their addition may also overflow, but YOLO
+		hard_assert (start_offset >= 0 && response->list_offset >= 0);
+
+		print_error ("%s: %s", response->message_text,
+			g.enqueue.vector[start_offset + response->list_offset]);
+		mpd_enqueue_step (start_offset + response->list_offset + 1);
+	}
+}
+
+static void
+mpd_enqueue_step (size_t start_offset)
+{
+	struct mpd_client *c = &g.client;
+	if (start_offset >= g.enqueue.len)
+	{
+		strv_reset (&g.enqueue);
+		return;
+	}
+
+	// TODO: might want to consider using addid and autoplaying
+	mpd_client_list_begin (c);
+	for (size_t i = start_offset; i < g.enqueue.len; i++)
+		mpd_client_send_command (c, "add", g.enqueue.vector[i], NULL);
+	mpd_client_list_end (c);
+	mpd_client_add_task (c, mpd_on_enqueue_response, (void *) start_offset);
+	mpd_client_idle (c, 0);
+}
+
+static void
+mpd_on_ready (void)
 {
 	mpd_request_info ();
 	library_tab_reload (NULL);
 	spectrum_setup_fifo ();
+	mpd_enqueue_step (0);
 }
 
 static void
@@ -4203,7 +4249,7 @@ mpd_on_password_response (const struct mpd_response *response,
 	struct mpd_client *c = &g.client;
 
 	if (response->success)
-		mpd_on_ready (c);
+		mpd_on_ready ();
 	else
 	{
 		print_error ("%s: %s",
@@ -4226,7 +4272,7 @@ mpd_on_connected (void *user_data)
 		mpd_client_add_task (c, mpd_on_password_response, NULL);
 	}
 	else
-		mpd_on_ready (c);
+		mpd_on_ready ();
 }
 
 static void
@@ -4525,6 +4571,28 @@ app_init_poller_events (void)
 	g.refresh_event.dispatcher = app_on_refresh;
 }
 
+static void
+app_init_enqueue (char *argv[], int argc)
+{
+	// TODO: MPD is unwilling to play directories, so perhaps recurse ourselves
+	char cwd[4096] = "";
+	for (int i = 0; i < argc; i++)
+	{
+		// This is a super-trivial method of URL detection, however anything
+		// contaning the scheme and authority delimiters in a sequence is most
+		// certainly not a filesystem path, and thus it will work as expected.
+		// Error handling may be done by MPD.
+		const char *path_or_URL = argv[i];
+		if (*path_or_URL == '/' || strstr (path_or_URL, "://"))
+			strv_append (&g.enqueue, path_or_URL);
+		else if (!*cwd && !getcwd (cwd, sizeof cwd))
+			exit_fatal ("getcwd: %s", strerror (errno));
+		else
+			strv_append_owned (&g.enqueue,
+				xstrdup_printf ("%s/%s", cwd, path_or_URL));
+	}
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -4537,7 +4605,8 @@ main (int argc, char *argv[])
 	};
 
 	struct opt_handler oh =
-		opt_handler_make (argc, argv, opts, NULL, "Terminal-based MPD client.");
+		opt_handler_make (argc, argv, opts,
+			"[URL | PATH]...", "Terminal-based MPD client.");
 
 	int c;
 	while ((c = opt_handler_get (&oh)) != -1)
@@ -4560,12 +4629,6 @@ main (int argc, char *argv[])
 
 	argc -= optind;
 	argv += optind;
-
-	if (argc)
-	{
-		opt_handler_usage (&oh, stderr);
-		exit (EXIT_FAILURE);
-	}
 	opt_handler_free (&oh);
 
 	// We only need to convert to and from the terminal encoding
@@ -4573,6 +4636,7 @@ main (int argc, char *argv[])
 		print_warning ("failed to set the locale");
 
 	app_init_context ();
+	app_init_enqueue (argv, argc);
 	app_load_configuration ();
 	signals_setup_handlers ();
 	app_init_poller_events ();
@@ -4595,6 +4659,11 @@ main (int argc, char *argv[])
 	app_prepend_tab (library_tab_init ());
 	app_prepend_tab (current_tab_init ());
 	app_switch_tab ((g.help_tab = help_tab_init ()));
+
+	// TODO: the help tab should be the default for new users only,
+	//   so provide a configuration option to flip this
+	if (argc)
+		app_switch_tab (&g_current_tab);
 
 	g.polling = true;
 	while (g.polling)
