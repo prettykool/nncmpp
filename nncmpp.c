@@ -3789,9 +3789,15 @@ spectrum_redraw (void)
 	// let's hack around it in this case
 	if (g.spectrum_row != -1)
 	{
+		// Don't mess up the line editor caret, when it's shown
+		int last_x, last_y;
+		getyx (stdscr, last_y, last_x);
+
 		attrset (APP_ATTR (TAB_BAR));
 		mvaddstr (g.spectrum_row, g.spectrum_column, g.spectrum.spectrum);
 		attrset (0);
+
+		move (last_y, last_x);
 		refresh ();
 	}
 	else
