@@ -1,4 +1,4 @@
-1.1.0 (20xx-xx-xx)
+1.1.0 (2021-10-21)
 
  * Now requesting and processing terminal de/focus events,
    using a new "defocused" attribute for selected rows
