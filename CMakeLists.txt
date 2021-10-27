@@ -26,12 +26,15 @@ if (USE_SYSTEM_TERMO)
 		message (FATAL_ERROR "System termo library not found")
 	endif (NOT Termo_FOUND)
 else ()
+	# We don't want the library to install, but EXCLUDE_FROM_ALL ignores tests
 	add_subdirectory (termo EXCLUDE_FROM_ALL)
-	# We don't have many good choices when we don't want to install it and want
-	# to support older versions of CMake; this is a relatively clean approach
-	# (other possibilities: setting a variable in the parent scope, using a
-	# cache variable, writing a special config file with build paths in it and
-	# including it here, or setting a custom property on the targets).
+	file (WRITE ${PROJECT_BINARY_DIR}/CTestCustom.cmake
+		"execute_process (COMMAND ${CMAKE_COMMAND} --build termo)")
+
+	# We don't have many good choices; this is a relatively clean approach
+	# (other possibilities: setting a variable in the parent scope, using
+	# a cache variable, writing a special config file with build paths in it
+	# and including it here, or setting a custom property on the targets)
 	get_directory_property (Termo_INCLUDE_DIRS
 		DIRECTORY termo INCLUDE_DIRECTORIES)
 	set (Termo_LIBRARIES termo-static)
