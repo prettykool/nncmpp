@@ -24,7 +24,7 @@ option (USE_SYSTEM_TERMO
 if (USE_SYSTEM_TERMO)
 	if (NOT Termo_FOUND)
 		message (FATAL_ERROR "System termo library not found")
-	endif (NOT Termo_FOUND)
+	endif ()
 else ()
 	# We don't want the library to install, but EXCLUDE_FROM_ALL ignores tests
 	add_subdirectory (termo EXCLUDE_FROM_ALL)
@@ -45,7 +45,7 @@ option (WITH_FFTW "Use FFTW to enable spectrum visualisation" ${fftw_FOUND})
 if (WITH_FFTW)
 	if (NOT fftw_FOUND)
 		message (FATAL_ERROR "FFTW not found")
-	endif()
+	endif ()
 endif ()
 
 include_directories (${Unistring_INCLUDE_DIRS}
@@ -54,15 +54,15 @@ include_directories (${Unistring_INCLUDE_DIRS}
 link_directories (${curl_LIBRARY_DIRS} ${fftw_LIBRARY_DIRS})
 
 # Configuration
-include (CheckFunctionExists)
-set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
-CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
-
 if ("${CMAKE_SYSTEM_NAME}" MATCHES "BSD")
 	# Need this for SIGWINCH in FreeBSD and OpenBSD respectively;
 	# our POSIX version macros make it undefined
 	add_definitions (-D__BSD_VISIBLE=1 -D_BSD_SOURCE=1)
 endif ()
+
+include (CheckFunctionExists)
+set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
+CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
 
 # -lm may or may not be a part of libc
 foreach (extra m)
