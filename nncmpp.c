@@ -110,7 +110,7 @@ enum
 static void
 update_curses_terminal_size (void)
 {
-#if defined (HAVE_RESIZETERM) && defined (TIOCGWINSZ)
+#if defined HAVE_RESIZETERM && defined TIOCGWINSZ
 	struct winsize size;
 	if (!ioctl (STDOUT_FILENO, TIOCGWINSZ, (char *) &size))
 	{
