@@ -7,3 +7,5 @@
 /nncmpp.files
 /nncmpp.creator*
 /nncmpp.includes
+/nncmpp.cflags
+/nncmpp.cxxflags
