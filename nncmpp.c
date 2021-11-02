@@ -78,9 +78,7 @@ enum
 #include <math.h>
 #include <locale.h>
 #include <termios.h>
-#ifndef TIOCGWINSZ
 #include <sys/ioctl.h>
-#endif  // ! TIOCGWINSZ
 
 // ncurses is notoriously retarded for input handling, we need something
 // different if only to receive mouse events reliably.
