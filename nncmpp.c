@@ -2586,10 +2586,12 @@ app_init_bindings (const char *keymap,
 static bool
 app_process_termo_event (termo_key_t *event)
 {
-	if (event->type == TERMO_TYPE_FOCUS)
+	bool handled = false;
+	if ((handled = event->type == TERMO_TYPE_FOCUS))
 	{
 		g.focused = !!event->code.focused;
 		app_invalidate ();
+		// Senseless fall-through
 	}
 
 	struct binding dummy = { *event, 0, 0 }, *binding;
@@ -2599,7 +2601,7 @@ app_process_termo_event (termo_key_t *event)
 			sizeof *binding, app_binding_cmp)))
 			return app_editor_process_action (binding->action);
 		if (event->type != TERMO_TYPE_KEY || event->modifiers != 0)
-			return false;
+			return handled;
 
 		line_editor_insert (&g.editor, event->code.codepoint);
 		app_invalidate ();
@@ -2618,7 +2620,7 @@ app_process_termo_event (termo_key_t *event)
 		if (app_goto_tab ((n == 0 ? 10 : n) - 1))
 			return true;
 	}
-	return false;
+	return handled;
 }
 
 // --- Current tab -------------------------------------------------------------
