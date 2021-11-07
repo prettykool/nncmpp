@@ -11,12 +11,14 @@ names, and should be pronounced as "nincompoop".
 
 Features
 --------
-Most things are there.  Enough for me to use it exclusively.  Notably, it can
-control PulseAudio volume directly to cover the use case of remote control,
-and it has a fast spectrum visualiser.
+Most stuff is there.  Enough for me to use the program exclusively.  Among other
+things, it can display and change PulseAudio volume directly to cover the use
+case of remote control, it has a fast spectrum visualiser, and both
+the appearance and key bindings can be customized.
 
 Note that since I only use the filesystem browsing mode, that's also the only
-thing I care to implement for the time being.  The search feature is awkward.
+thing I care to implement for the time being.  Similarly, the search feature is
+known to be clumsy.
 
 image::nncmpp.png[align="center"]
 
