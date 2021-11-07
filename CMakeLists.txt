@@ -46,12 +46,23 @@ if (WITH_FFTW)
 	if (NOT fftw_FOUND)
 		message (FATAL_ERROR "FFTW not found")
 	endif ()
+	list (APPEND extra_libraries ${fftw_LIBRARIES})
+endif ()
+
+pkg_check_modules (libpulse libpulse)
+option (WITH_PULSE "Enable control of PulseAudio sink volume" ${libpulse_FOUND})
+if (WITH_PULSE)
+	if (NOT libpulse_FOUND)
+		message (FATAL_ERROR "libpulse not found")
+	endif ()
+	list (APPEND extra_libraries ${libpulse_LIBRARIES})
 endif ()
 
 include_directories (${Unistring_INCLUDE_DIRS}
 	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS} ${curl_INCLUDE_DIRS}
-	${fftw_INCLUDE_DIRS})
-link_directories (${curl_LIBRARY_DIRS} ${fftw_LIBRARY_DIRS})
+	${fftw_INCLUDE_DIRS} ${libpulse_INCLUDE_DIRS})
+link_directories (${curl_LIBRARY_DIRS}
+	${fftw_LIBRARY_DIRS} ${libpulse_LIBRARY_DIRS})
 
 # Configuration
 if ("${CMAKE_SYSTEM_NAME}" MATCHES "BSD")
@@ -82,8 +93,7 @@ include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 # Build the main executable and link it
 add_executable (${PROJECT_NAME} ${PROJECT_NAME}.c)
 target_link_libraries (${PROJECT_NAME} ${Unistring_LIBRARIES}
-	${Ncursesw_LIBRARIES} termo-static ${curl_LIBRARIES}
-	${fftw_LIBRARIES} ${extra_libraries})
+	${Ncursesw_LIBRARIES} termo-static ${curl_LIBRARIES} ${extra_libraries})
 add_threads (${PROJECT_NAME})
 
 # Installation

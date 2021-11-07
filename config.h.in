@@ -6,6 +6,7 @@
 
 #cmakedefine HAVE_RESIZETERM
 #cmakedefine WITH_FFTW
+#cmakedefine WITH_PULSE
 
 #endif  // ! CONFIG_H
 

@@ -85,20 +85,27 @@ enum
 //
 // 2021 update: ncurses is mostly reliable now, though rxvt-unicode only
 // supports the 1006 mode that ncurses also supports mode starting with 9.25.
-
 #include "termo.h"
 
 // We need cURL to extract links from Internet stream playlists.  It'd be way
 // too much code to do this all by ourselves, and there's nothing better around.
-
 #include <curl/curl.h>
 
 // The spectrum analyser requires a DFT transform.  The FFTW library is fairly
 // efficient, and doesn't have a requirement on the number of bins.
-
 #ifdef WITH_FFTW
 #include <fftw3.h>
 #endif  // WITH_FFTW
+
+// Remote MPD control needs appropriate volume controls.
+#ifdef WITH_PULSE
+#include "liberty/liberty-pulse.c"
+#include <pulse/context.h>
+#include <pulse/error.h>
+#include <pulse/introspect.h>
+#include <pulse/subscribe.h>
+#include <pulse/sample.h>
+#endif  // WITH_PULSE
 
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
@@ -860,6 +867,256 @@ spectrum_free (struct spectrum *s)
 
 #endif  // WITH_FFTW
 
+// --- PulseAudio --------------------------------------------------------------
+
+#ifdef WITH_PULSE
+
+struct pulse
+{
+	struct poller_timer make_context;   ///< Event to establish connection
+	pa_mainloop_api *api;               ///< PulseAudio event loop proxy
+	pa_context *context;                ///< PulseAudio connection context
+	uint32_t sink_candidate;            ///< Used while searching for MPD
+	uint32_t sink;                      ///< The relevant sink or -1
+	pa_cvolume sink_volume;             ///< Current volume
+	bool sink_muted;                    ///< Currently muted?
+
+	void (*on_update) (void);           ///< Update callback
+};
+
+static void
+pulse_on_sink_info (pa_context *context, const pa_sink_info *info, int eol,
+	void *userdata)
+{
+	(void) context;
+	(void) eol;
+
+	struct pulse *self = userdata;
+	if (info)
+	{
+		self->sink_volume = info->volume;
+		self->sink_muted = !!info->mute;
+		self->on_update ();
+	}
+}
+
+static void
+pulse_update_from_sink (struct pulse *self)
+{
+	if (self->sink == PA_INVALID_INDEX)
+		return;
+
+	pa_operation_unref (pa_context_get_sink_info_by_index
+		(self->context, self->sink, pulse_on_sink_info, self));
+}
+
+static void
+pulse_on_sink_input_info (pa_context *context,
+	const struct pa_sink_input_info *info, int eol, void *userdata)
+{
+	(void) context;
+	(void) eol;
+
+	struct pulse *self = userdata;
+	if (!info)
+	{
+		if ((self->sink = self->sink_candidate) != PA_INVALID_INDEX)
+			pulse_update_from_sink (self);
+		else
+			self->on_update ();
+		return;
+	}
+
+	// TODO: also save info->mute as a different mute level,
+	//   and perhaps info->index (they can appear and disappear)
+	const char *name =
+		pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_NAME);
+	if (name && !strcmp (name, "Music Player Daemon"))
+		self->sink_candidate = info->sink;
+}
+
+static void
+pulse_read_sink_inputs (struct pulse *self)
+{
+	self->sink_candidate = PA_INVALID_INDEX;
+	pa_operation_unref (pa_context_get_sink_input_info_list
+		(self->context, pulse_on_sink_input_info, self));
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+pulse_on_event (pa_context *context, pa_subscription_event_type_t event,
+	uint32_t index, void *userdata)
+{
+	(void) context;
+
+	struct pulse *self = userdata;
+	switch (event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK)
+	{
+	case PA_SUBSCRIPTION_EVENT_SINK_INPUT:
+		pulse_read_sink_inputs (self);
+		break;
+	case PA_SUBSCRIPTION_EVENT_SINK:
+		if (index == self->sink)
+			pulse_update_from_sink (self);
+	}
+}
+
+static void
+pulse_on_subscribe_finish (pa_context *context, int success, void *userdata)
+{
+	(void) context;
+
+	struct pulse *self = userdata;
+	if (success)
+		pulse_read_sink_inputs (self);
+	else
+	{
+		print_debug ("PulseAudio failed to subscribe for events");
+		self->on_update ();
+		pa_context_disconnect (context);
+	}
+}
+
+static void
+pulse_on_context_state_change (pa_context *context, void *userdata)
+{
+	struct pulse *self = userdata;
+	switch (pa_context_get_state (context))
+	{
+	case PA_CONTEXT_FAILED:
+	case PA_CONTEXT_TERMINATED:
+		print_debug ("PulseAudio context failed or has been terminated");
+
+		pa_context_unref (context);
+		self->context = NULL;
+		self->sink = PA_INVALID_INDEX;
+		self->on_update ();
+
+		// Retry after an arbitrary delay of 5 seconds
+		poller_timer_set (&self->make_context, 5000);
+		break;
+	case PA_CONTEXT_READY:
+		pa_context_set_subscribe_callback (context, pulse_on_event, userdata);
+		pa_operation_unref (pa_context_subscribe (context,
+			PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SINK_INPUT,
+			pulse_on_subscribe_finish, userdata));
+	default:
+		break;
+	}
+}
+
+static void
+pulse_make_context (void *user_data)
+{
+	struct pulse *self = user_data;
+	self->context = pa_context_new (self->api, PROGRAM_NAME);
+	pa_context_set_state_callback (self->context,
+		pulse_on_context_state_change, self);
+	pa_context_connect (self->context, NULL, PA_CONTEXT_NOAUTOSPAWN, NULL);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+pulse_on_finish (pa_context *context, int success, void *userdata)
+{
+	(void) context;
+	(void) success;
+	(void) userdata;
+
+	// Just like... whatever, man
+}
+
+static bool
+pulse_volume_mute (struct pulse *self)
+{
+	if (!self->context || self->sink == PA_INVALID_INDEX)
+		return false;
+
+	pa_operation_unref (pa_context_set_sink_mute_by_index (self->context,
+		self->sink, !self->sink_muted, pulse_on_finish, self));
+	return true;
+}
+
+static bool
+pulse_volume_set (struct pulse *self, int arg)
+{
+	if (!self->context || self->sink == PA_INVALID_INDEX)
+		return false;
+
+	pa_cvolume volume = self->sink_volume;
+	if (arg > 0)
+		pa_cvolume_inc (&volume, (pa_volume_t)  arg * PA_VOLUME_NORM / 100);
+	else
+		pa_cvolume_dec (&volume, (pa_volume_t) -arg * PA_VOLUME_NORM / 100);
+	pa_operation_unref (pa_context_set_sink_volume_by_index (self->context,
+		self->sink, &volume, pulse_on_finish, self));
+	return true;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+pulse_init (struct pulse *self, struct poller *poller)
+{
+	memset (self, 0, sizeof *self);
+	self->sink = PA_INVALID_INDEX;
+	if (!poller)
+		return;
+
+	self->api = poller_pa_new (poller);
+
+	self->make_context = poller_timer_make (poller);
+	self->make_context.dispatcher = pulse_make_context;
+	self->make_context.user_data = self;
+	poller_timer_set (&self->make_context, 0);
+}
+
+static void
+pulse_free (struct pulse *self)
+{
+	if (self->context)
+		pa_context_unref (self->context);
+	if (self->api)
+	{
+		poller_pa_destroy (self->api);
+		poller_timer_reset (&self->make_context);
+	}
+
+	pulse_init (self, NULL);
+}
+
+#define VOLUME_PERCENT(x) (((x) * 100 + PA_VOLUME_NORM / 2) / PA_VOLUME_NORM)
+
+static bool
+pulse_volume_status (struct pulse *self, struct str *s)
+{
+	if (!self->context || self->sink == PA_INVALID_INDEX
+	 || !self->sink_volume.channels)
+		return false;
+
+	if (self->sink_muted)
+	{
+		str_append (s, "Muted");
+		return true;
+	}
+
+	str_append_printf (s,
+		"%u%%", VOLUME_PERCENT (self->sink_volume.values[0]));
+	if (!pa_cvolume_channels_equal_to (&self->sink_volume,
+			self->sink_volume.values[0]))
+	{
+		for (size_t i = 1; i < self->sink_volume.channels; i++)
+			str_append_printf (s, " / %u%%",
+				VOLUME_PERCENT (self->sink_volume.values[i]));
+	}
+	return true;
+}
+
+#endif  // WITH_PULSE
+
 // --- Application -------------------------------------------------------------
 
 // Function names are prefixed mostly because of curses which clutters the
@@ -983,6 +1240,10 @@ static struct app_context
 	struct poller_fd spectrum_event;    ///< FIFO watcher
 #endif  // WITH_FFTW
 
+#ifdef WITH_PULSE
+	struct pulse pulse;                 ///< PulseAudio control
+#endif  // WITH_PULSE
+
 	struct line_editor editor;          ///< Line editor
 	struct poller_idle refresh_event;   ///< Refresh the screen
 
@@ -1075,6 +1336,13 @@ static struct config_schema g_config_settings[] =
 	  .default_  = "8" },
 #endif  // WITH_FFTW
 
+#ifdef WITH_PULSE
+	{ .name      = "pulseaudio",
+	  .comment   = "Visualizer feed data format",
+	  .type      = CONFIG_ITEM_BOOLEAN,
+	  .default_  = "off" },
+#endif  // WITH_PULSE
+
 	// Disabling this minimises MPD traffic and has the following caveats:
 	//  - when MPD stalls on retrieving audio data, we keep ticking
 	//  - when the "play" succeeds in ACTION_MPD_REPLACE for the same item as
@@ -1106,6 +1374,14 @@ get_config_string (struct config_item *root, const char *key)
 		return NULL;
 	hard_assert (config_item_type_is_string (item->type));
 	return item->value.string.str;
+}
+
+static bool
+get_config_boolean (struct config_item *root, const char *key)
+{
+	struct config_item *item = config_item_get (root, key, NULL);
+	hard_assert (item && item->type == CONFIG_ITEM_BOOLEAN);
+	return item->value.boolean;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1235,6 +1511,10 @@ app_init_context (void)
 	g.spectrum_row = g.spectrum_column = -1;
 #endif  // WITH_FFTW
 
+#ifdef WITH_PULSE
+	pulse_init (&g.pulse, NULL);
+#endif  // WITH_PULSE
+
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
 	// Note that non-Unicode locales are handled pretty inefficiently.
@@ -1297,6 +1577,10 @@ app_free_context (void)
 		xclose (g.spectrum_fd);
 	}
 #endif  // WITH_FFTW
+
+#ifdef WITH_PULSE
+	pulse_free (&g.pulse);
+#endif  // WITH_PULSE
 
 	line_editor_free (&g.editor);
 
@@ -1497,12 +1781,17 @@ app_draw_status (void)
 	}
 
 	// It gets a bit complicated due to the only right-aligned item on the row
-	char *volume = NULL;
+	struct str volume = str_make ();
 	int remaining = COLS - buf.total_width;
 	if (g.volume >= 0)
 	{
-		volume = xstrdup_printf ("  %3d%%", g.volume);
-		remaining -= strlen (volume);
+		str_append (&volume, "  ");
+#ifdef WITH_PULSE
+		if (pulse_volume_status (&g.pulse, &volume))
+			str_append (&volume, " @ ");
+#endif  // WITH_PULSE
+		str_append_printf (&volume, "%3d%%", g.volume);
+		remaining -= volume.len;
 	}
 
 	if (!stopped && g.song_elapsed >= 0 && g.song_duration >= 1
@@ -1516,11 +1805,10 @@ app_draw_status (void)
 	else
 		row_buffer_space (&buf, remaining, attr_normal);
 
-	if (volume)
-	{
-		row_buffer_append (&buf, volume, attr_normal);
-		free (volume);
-	}
+	if (volume.len)
+		row_buffer_append (&buf, volume.str, attr_normal);
+	str_free (&volume);
+
 	g.controls_offset = g.header_height;
 	app_flush_header (&buf, attr_normal);
 }
@@ -1947,74 +2235,85 @@ app_goto_tab (int tab_index)
 
 // --- Actions -----------------------------------------------------------------
 
+#ifdef WITH_PULSE
+#define WITH_PULSE_01 1
+#else
+#define WITH_PULSE_01 0
+#endif
+
+// TODO: use the C preprocessor and a tool to generate this from nncmpp.actions
 #define ACTIONS(XX) \
-	XX( NONE,               Do nothing                  ) \
+	XX( 1, NONE,               Do nothing                  ) \
 	\
-	XX( QUIT,               Quit                        ) \
-	XX( REDRAW,             Redraw screen               ) \
-	XX( TAB_HELP,           Switch to help tab          ) \
-	XX( TAB_LAST,           Switch to last tab          ) \
-	XX( TAB_PREVIOUS,       Switch to previous tab      ) \
-	XX( TAB_NEXT,           Switch to next tab          ) \
+	XX( 1, QUIT,               Quit                        ) \
+	XX( 1, REDRAW,             Redraw screen               ) \
+	XX( 1, TAB_HELP,           Switch to help tab          ) \
+	XX( 1, TAB_LAST,           Switch to last tab          ) \
+	XX( 1, TAB_PREVIOUS,       Switch to previous tab      ) \
+	XX( 1, TAB_NEXT,           Switch to next tab          ) \
 	\
-	XX( MPD_TOGGLE,         Toggle play/pause           ) \
-	XX( MPD_STOP,           Stop playback               ) \
-	XX( MPD_PREVIOUS,       Previous song               ) \
-	XX( MPD_NEXT,           Next song                   ) \
-	XX( MPD_BACKWARD,       Seek backwards              ) \
-	XX( MPD_FORWARD,        Seek forwards               ) \
-	XX( MPD_VOLUME_UP,      Increase volume             ) \
-	XX( MPD_VOLUME_DOWN,    Decrease volume             ) \
+	XX( 1, MPD_TOGGLE,         Toggle play/pause           ) \
+	XX( 1, MPD_STOP,           Stop playback               ) \
+	XX( 1, MPD_PREVIOUS,       Previous song               ) \
+	XX( 1, MPD_NEXT,           Next song                   ) \
+	XX( 1, MPD_BACKWARD,       Seek backwards              ) \
+	XX( 1, MPD_FORWARD,        Seek forwards               ) \
+	XX( 1, MPD_VOLUME_UP,      Increase volume             ) \
+	XX( 1, MPD_VOLUME_DOWN,    Decrease volume             ) \
 	\
-	XX( MPD_SEARCH,         Global search               ) \
-	XX( MPD_ADD,            Add selection to playlist   ) \
-	XX( MPD_REPLACE,        Replace playlist            ) \
-	XX( MPD_REPEAT,         Toggle repeat               ) \
-	XX( MPD_RANDOM,         Toggle random playback      ) \
-	XX( MPD_SINGLE,         Toggle single song playback ) \
-	XX( MPD_CONSUME,        Toggle consume              ) \
-	XX( MPD_UPDATE_DB,      Update MPD database         ) \
-	XX( MPD_COMMAND,        Send raw command to MPD     ) \
+	XX( 1, MPD_SEARCH,         Global search               ) \
+	XX( 1, MPD_ADD,            Add selection to playlist   ) \
+	XX( 1, MPD_REPLACE,        Replace playlist            ) \
+	XX( 1, MPD_REPEAT,         Toggle repeat               ) \
+	XX( 1, MPD_RANDOM,         Toggle random playback      ) \
+	XX( 1, MPD_SINGLE,         Toggle single song playback ) \
+	XX( 1, MPD_CONSUME,        Toggle consume              ) \
+	XX( 1, MPD_UPDATE_DB,      Update MPD database         ) \
+	XX( 1, MPD_COMMAND,        Send raw command to MPD     ) \
 	\
-	XX( CHOOSE,             Choose item                 ) \
-	XX( DELETE,             Delete item                 ) \
-	XX( UP,                 Go up a level               ) \
-	XX( MULTISELECT,        Toggle multiselect          ) \
+	XX( WITH_PULSE_01, PULSE_VOLUME_UP,   Increase PulseAudio volume         ) \
+	XX( WITH_PULSE_01, PULSE_VOLUME_DOWN, Decrease PulseAudio volume         ) \
+	XX( WITH_PULSE_01, PULSE_MUTE,        Toggle mute of MPD PulseAudio sink ) \
 	\
-	XX( SCROLL_UP,          Scroll up                   ) \
-	XX( SCROLL_DOWN,        Scroll down                 ) \
-	XX( MOVE_UP,            Move selection up           ) \
-	XX( MOVE_DOWN,          Move selection down         ) \
+	XX( 1, CHOOSE,             Choose item                 ) \
+	XX( 1, DELETE,             Delete item                 ) \
+	XX( 1, UP,                 Go up a level               ) \
+	XX( 1, MULTISELECT,        Toggle multiselect          ) \
 	\
-	XX( GOTO_TOP,           Go to top                   ) \
-	XX( GOTO_BOTTOM,        Go to bottom                ) \
-	XX( GOTO_ITEM_PREVIOUS, Go to previous item         ) \
-	XX( GOTO_ITEM_NEXT,     Go to next item             ) \
-	XX( GOTO_PAGE_PREVIOUS, Go to previous page         ) \
-	XX( GOTO_PAGE_NEXT,     Go to next page             ) \
+	XX( 1, SCROLL_UP,          Scroll up                   ) \
+	XX( 1, SCROLL_DOWN,        Scroll down                 ) \
+	XX( 1, MOVE_UP,            Move selection up           ) \
+	XX( 1, MOVE_DOWN,          Move selection down         ) \
 	\
-	XX( GOTO_VIEW_TOP,      Select top item             ) \
-	XX( GOTO_VIEW_CENTER,   Select center item          ) \
-	XX( GOTO_VIEW_BOTTOM,   Select bottom item          ) \
+	XX( 1, GOTO_TOP,           Go to top                   ) \
+	XX( 1, GOTO_BOTTOM,        Go to bottom                ) \
+	XX( 1, GOTO_ITEM_PREVIOUS, Go to previous item         ) \
+	XX( 1, GOTO_ITEM_NEXT,     Go to next item             ) \
+	XX( 1, GOTO_PAGE_PREVIOUS, Go to previous page         ) \
+	XX( 1, GOTO_PAGE_NEXT,     Go to next page             ) \
 	\
-	XX( EDITOR_CONFIRM,     Confirm input               ) \
+	XX( 1, GOTO_VIEW_TOP,      Select top item             ) \
+	XX( 1, GOTO_VIEW_CENTER,   Select center item          ) \
+	XX( 1, GOTO_VIEW_BOTTOM,   Select bottom item          ) \
 	\
-	XX( EDITOR_B_CHAR,      Go back a character         ) \
-	XX( EDITOR_F_CHAR,      Go forward a character      ) \
-	XX( EDITOR_B_WORD,      Go back a word              ) \
-	XX( EDITOR_F_WORD,      Go forward a word           ) \
-	XX( EDITOR_HOME,        Go to start of line         ) \
-	XX( EDITOR_END,         Go to end of line           ) \
+	XX( 1, EDITOR_CONFIRM,     Confirm input               ) \
 	\
-	XX( EDITOR_B_DELETE,    Delete last character       ) \
-	XX( EDITOR_F_DELETE,    Delete next character       ) \
-	XX( EDITOR_B_KILL_WORD, Delete last word            ) \
-	XX( EDITOR_B_KILL_LINE, Delete everything up to BOL ) \
-	XX( EDITOR_F_KILL_LINE, Delete everything up to EOL )
+	XX( 1, EDITOR_B_CHAR,      Go back a character         ) \
+	XX( 1, EDITOR_F_CHAR,      Go forward a character      ) \
+	XX( 1, EDITOR_B_WORD,      Go back a word              ) \
+	XX( 1, EDITOR_F_WORD,      Go forward a word           ) \
+	XX( 1, EDITOR_HOME,        Go to start of line         ) \
+	XX( 1, EDITOR_END,         Go to end of line           ) \
+	\
+	XX( 1, EDITOR_B_DELETE,    Delete last character       ) \
+	XX( 1, EDITOR_F_DELETE,    Delete next character       ) \
+	XX( 1, EDITOR_B_KILL_WORD, Delete last word            ) \
+	XX( 1, EDITOR_B_KILL_LINE, Delete everything up to BOL ) \
+	XX( 1, EDITOR_F_KILL_LINE, Delete everything up to EOL )
 
 enum action
 {
-#define XX(name, description) ACTION_ ## name,
+#define XX(usable, name, description) ACTION_ ## name,
 	ACTIONS (XX)
 #undef XX
 	ACTION_COUNT
@@ -2024,10 +2323,11 @@ static struct action_info
 {
 	const char *name;                   ///< Name for user bindings
 	const char *description;            ///< Human-readable description
+	bool usable;                        ///< Usable?
 }
 g_actions[] =
 {
-#define XX(name, description) { #name, #description },
+#define XX(usable, name, description) { #name, #description, usable },
 	ACTIONS (XX)
 #undef XX
 };
@@ -2223,6 +2523,12 @@ app_process_action (enum action action)
 
 	case ACTION_MPD_VOLUME_UP:          return app_setvol (g.volume + 10);
 	case ACTION_MPD_VOLUME_DOWN:        return app_setvol (g.volume - 10);
+
+#ifdef WITH_PULSE
+	case ACTION_PULSE_VOLUME_UP:        return pulse_volume_set (&g.pulse, +10);
+	case ACTION_PULSE_VOLUME_DOWN:      return pulse_volume_set (&g.pulse, -10);
+	case ACTION_PULSE_MUTE:             return pulse_volume_mute (&g.pulse);
+#endif  // WITH_PULSE
 
 		// XXX: these should rather be parametrized
 	case ACTION_SCROLL_UP:              return app_scroll (-3);
@@ -3637,6 +3943,9 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out,
 {
 	for (enum action i = 0; i < ACTION_COUNT; i++)
 	{
+		if (!g_actions[i].usable)
+			continue;
+
 		struct strv ass = strv_make ();
 		for (size_t k = 0; k < len; k++)
 			if (keys[k].action == i)
@@ -3911,10 +4220,84 @@ spectrum_setup_fifo (void)
 }
 
 #else  // ! WITH_FFTW
-#define spectrum_setup_fifo()
-#define spectrum_clear()
-#define spectrum_discard_fifo()
+#define spectrum_setup_fifo()   BLOCK_START BLOCK_END
+#define spectrum_clear()        BLOCK_START BLOCK_END
+#define spectrum_discard_fifo() BLOCK_START BLOCK_END
 #endif  // ! WITH_FFTW
+
+// --- PulseAudio --------------------------------------------------------------
+
+#ifdef WITH_PULSE
+
+static bool
+mpd_find_output (const struct strv *data, const char *wanted)
+{
+	// The plugin field is new in MPD 0.21, by default take any output
+	unsigned long n, accept = 1;
+	for (size_t i = data->len; i--; )
+	{
+		char *key, *value;
+		if (!(key = mpd_parse_kv (data->vector[i], &value)))
+			continue;
+
+		if (!strcasecmp_ascii (key, "outputid"))
+		{
+			if (accept)
+				return true;
+
+			accept = 1;
+		}
+		else if (!strcasecmp_ascii (key, "plugin"))
+			accept &= !strcmp (value, wanted);
+		else if (!strcasecmp_ascii (key, "outputenabled")
+			&& xstrtoul (&n, value, 10))
+			accept &= n == 1;
+	}
+	return false;
+}
+
+static void
+mpd_on_outputs_response (const struct mpd_response *response,
+	const struct strv *data, void *user_data)
+{
+	(void) user_data;
+
+	// TODO: check whether an action is actually necessary
+	pulse_free (&g.pulse);
+	if (response->success && !mpd_find_output (data, "pulse"))
+		print_debug ("MPD has no PulseAudio output to control");
+	else
+	{
+		pulse_init (&g.pulse, &g.poller);
+		g.pulse.on_update = app_invalidate;
+	}
+
+	app_invalidate ();
+}
+
+static void
+pulse_update (void)
+{
+	struct mpd_client *c = &g.client;
+	if (!get_config_boolean (g.config.root, "settings.pulseaudio"))
+		return;
+
+	// The read permission is sufficient for this command
+	mpd_client_send_command (c, "outputs", NULL);
+	mpd_client_add_task (c, mpd_on_outputs_response, NULL);
+}
+
+static void
+pulse_disable (void)
+{
+	pulse_free (&g.pulse);
+	app_invalidate ();
+}
+
+#else  // ! WITH_PULSE
+#define pulse_update()  BLOCK_START BLOCK_END
+#define pulse_disable() BLOCK_START BLOCK_END
+#endif  // ! WITH_PULSE
 
 // --- MPD interface -----------------------------------------------------------
 
@@ -4180,6 +4563,8 @@ mpd_on_events (unsigned subsystems, void *user_data)
 
 	if (subsystems & MPD_SUBSYSTEM_DATABASE)
 		library_tab_reload (NULL);
+	if (subsystems & MPD_SUBSYSTEM_OUTPUT)
+		pulse_update ();
 
 	if (subsystems & (MPD_SUBSYSTEM_PLAYER | MPD_SUBSYSTEM_OPTIONS
 		| MPD_SUBSYSTEM_PLAYLIST | MPD_SUBSYSTEM_MIXER | MPD_SUBSYSTEM_UPDATE))
@@ -4244,6 +4629,7 @@ mpd_on_ready (void)
 	mpd_request_info ();
 	library_tab_reload (NULL);
 	spectrum_setup_fifo ();
+	pulse_update ();
 	mpd_enqueue_step (0);
 }
 
@@ -4298,6 +4684,7 @@ mpd_on_failure (void *user_data)
 	info_tab_update ();
 
 	spectrum_discard_fifo ();
+	pulse_disable ();
 }
 
 static void

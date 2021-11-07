@@ -37,16 +37,18 @@ Options
 
 Configuration
 -------------
-Unless you run MPD on a remote machine, on an unusual port, or protected by
-a password, the client doesn't need a configuration file to work.  It is,
-however, likely that you'll want to customize the looks or add some streams.
-You can start off with the following snippet:
+Unless you run MPD on a remote machine, on an unusual port, protected by
+a password, or only accessible through a Unix socket, the client doesn't need
+a configuration file to work.  It is, however, likely that you'll want to
+customize the looks or add some streams.  You can start off with the following
+snippet:
 
 ....
 settings = {
-	address    = "localhost:6600"
+	address    = "~/.mpd/mpd.socket"
 	password   = "<your password>"
 	root       = "~/Music"
+	pulseaudio = on
 }
 colors = {
 	normal      = ""

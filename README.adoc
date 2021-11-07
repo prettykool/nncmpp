@@ -11,9 +11,12 @@ names, and should be pronounced as "nincompoop".
 
 Features
 --------
-Most things are there.  Enough for me to use it exclusively.  Note that since I
-only use the filesystem browsing mode, that's also the only thing I care to
-implement for the time being.
+Most things are there.  Enough for me to use it exclusively.  Notably, it can
+control PulseAudio volume directly to cover the use case of remote control,
+and it has a fast spectrum visualiser.
+
+Note that since I only use the filesystem browsing mode, that's also the only
+thing I care to implement for the time being.  The search feature is awkward.
 
 image::nncmpp.png[align="center"]
 
@@ -29,9 +32,10 @@ The rest of this README will concern itself with externalities.
 
 Building
 --------
-Build dependencies: CMake, pkg-config, asciidoctor, liberty (included),
-                    termo (included) +
-Runtime dependencies: ncursesw, libunistring, cURL, fftw3 (optional)
+Build dependencies: CMake, pkg-config, asciidoctor,
+                    liberty (included), termo (included) +
+Runtime dependencies: ncursesw, libunistring, cURL,
+                      fftw3 (optional), libpulse (optional)
 
  $ git clone --recursive https://git.janouch.name/p/nncmpp.git
  $ mkdir nncmpp/build
