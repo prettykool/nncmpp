@@ -1054,6 +1054,7 @@ static struct config_schema g_config_settings[] =
 	  .type      = CONFIG_ITEM_STRING },
 
 	// NOTE: this is unused--in theory we could allow manual metadata adjustment
+	// NOTE: the "config" command may return "music_directory" for local clients
 	{ .name      = "root",
 	  .comment   = "Where all the files MPD is playing are located",
 	  .type      = CONFIG_ITEM_STRING },
