@@ -94,13 +94,13 @@ include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 set (actions ${PROJECT_BINARY_DIR}/nncmpp-actions.h)
 add_custom_command (OUTPUT ${actions}
 	COMMAND cpp -I${PROJECT_BINARY_DIR} -P ${PROJECT_SOURCE_DIR}/nncmpp.actions
-		| grep . | tr [[\n]] [[\t]] | sed -ne [[y/\t/\n/]] > ${actions}
-			-e [[h; s/,[^\n]*/,/g]] -e [[s/$/COUNT/]]
-			-e [[s/[^\n]*/\tACTION_&/g]] -e [[s/.*/enum action {\n&\n};\n/p]]
-			-e [[g; s/,[^\n]*//g; y/_/-/]] -e [[s/[^\n]\{1,\}/\t"&",/g]]
+		| grep . | tr [[\n]] ^ | sed -ne [[h; s/,[^^]*/,/g]] -e [[s/$/COUNT/]]
+			-e [[s/[^^]*/\tACTION_&/g]] -e [[s/.*/enum action {\n&\n};\n/p]]
+			-e [[g; s/,[^^]*//g; y/_/-/]] -e [[s/[^^]\{1,\}/\t"&",/g]]
 			-e [[s/.*/static const char *g_action_names[] = {\n&};\n/p]]
-			-e [[g; s/[^\n]*, //g;]] -e [[s/[^\n]\{1,\}/\t"&",/g]]
+			-e [[g; s/[^^]*, *//g;]] -e [[s/[^^]\{1,\}/\t"&",/g]]
 			-e [[s/.*/static const char *g_action_descriptions[] = {\n&};/p]]
+		| tr ^ [[\n]] > ${actions}
 	COMMAND test -s ${actions}
 	DEPENDS ${PROJECT_BINARY_DIR}/config.h VERBATIM)
 
