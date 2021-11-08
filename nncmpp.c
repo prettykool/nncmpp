@@ -1338,7 +1338,7 @@ static struct config_schema g_config_settings[] =
 
 #ifdef WITH_PULSE
 	{ .name      = "pulseaudio",
-	  .comment   = "Visualizer feed data format",
+	  .comment   = "Look up MPD in PulseAudio for improved volume controls",
 	  .type      = CONFIG_ITEM_BOOLEAN,
 	  .default_  = "off" },
 #endif  // WITH_PULSE
