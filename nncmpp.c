@@ -2235,117 +2235,14 @@ app_goto_tab (int tab_index)
 
 // --- Actions -----------------------------------------------------------------
 
-#ifdef WITH_PULSE
-#define WITH_PULSE_01 1
-#else
-#define WITH_PULSE_01 0
-#endif
-
-// TODO: use the C preprocessor and a tool to generate this from nncmpp.actions
-#define ACTIONS(XX) \
-	XX( 1, NONE,               Do nothing                  ) \
-	\
-	XX( 1, QUIT,               Quit                        ) \
-	XX( 1, REDRAW,             Redraw screen               ) \
-	XX( 1, TAB_HELP,           Switch to help tab          ) \
-	XX( 1, TAB_LAST,           Switch to last tab          ) \
-	XX( 1, TAB_PREVIOUS,       Switch to previous tab      ) \
-	XX( 1, TAB_NEXT,           Switch to next tab          ) \
-	\
-	XX( 1, MPD_TOGGLE,         Toggle play/pause           ) \
-	XX( 1, MPD_STOP,           Stop playback               ) \
-	XX( 1, MPD_PREVIOUS,       Previous song               ) \
-	XX( 1, MPD_NEXT,           Next song                   ) \
-	XX( 1, MPD_BACKWARD,       Seek backwards              ) \
-	XX( 1, MPD_FORWARD,        Seek forwards               ) \
-	XX( 1, MPD_VOLUME_UP,      Increase volume             ) \
-	XX( 1, MPD_VOLUME_DOWN,    Decrease volume             ) \
-	\
-	XX( 1, MPD_SEARCH,         Global search               ) \
-	XX( 1, MPD_ADD,            Add selection to playlist   ) \
-	XX( 1, MPD_REPLACE,        Replace playlist            ) \
-	XX( 1, MPD_REPEAT,         Toggle repeat               ) \
-	XX( 1, MPD_RANDOM,         Toggle random playback      ) \
-	XX( 1, MPD_SINGLE,         Toggle single song playback ) \
-	XX( 1, MPD_CONSUME,        Toggle consume              ) \
-	XX( 1, MPD_UPDATE_DB,      Update MPD database         ) \
-	XX( 1, MPD_COMMAND,        Send raw command to MPD     ) \
-	\
-	XX( WITH_PULSE_01, PULSE_VOLUME_UP,   Increase PulseAudio volume         ) \
-	XX( WITH_PULSE_01, PULSE_VOLUME_DOWN, Decrease PulseAudio volume         ) \
-	XX( WITH_PULSE_01, PULSE_MUTE,        Toggle mute of MPD PulseAudio sink ) \
-	\
-	XX( 1, CHOOSE,             Choose item                 ) \
-	XX( 1, DELETE,             Delete item                 ) \
-	XX( 1, UP,                 Go up a level               ) \
-	XX( 1, MULTISELECT,        Toggle multiselect          ) \
-	\
-	XX( 1, SCROLL_UP,          Scroll up                   ) \
-	XX( 1, SCROLL_DOWN,        Scroll down                 ) \
-	XX( 1, MOVE_UP,            Move selection up           ) \
-	XX( 1, MOVE_DOWN,          Move selection down         ) \
-	\
-	XX( 1, GOTO_TOP,           Go to top                   ) \
-	XX( 1, GOTO_BOTTOM,        Go to bottom                ) \
-	XX( 1, GOTO_ITEM_PREVIOUS, Go to previous item         ) \
-	XX( 1, GOTO_ITEM_NEXT,     Go to next item             ) \
-	XX( 1, GOTO_PAGE_PREVIOUS, Go to previous page         ) \
-	XX( 1, GOTO_PAGE_NEXT,     Go to next page             ) \
-	\
-	XX( 1, GOTO_VIEW_TOP,      Select top item             ) \
-	XX( 1, GOTO_VIEW_CENTER,   Select center item          ) \
-	XX( 1, GOTO_VIEW_BOTTOM,   Select bottom item          ) \
-	\
-	XX( 1, EDITOR_CONFIRM,     Confirm input               ) \
-	\
-	XX( 1, EDITOR_B_CHAR,      Go back a character         ) \
-	XX( 1, EDITOR_F_CHAR,      Go forward a character      ) \
-	XX( 1, EDITOR_B_WORD,      Go back a word              ) \
-	XX( 1, EDITOR_F_WORD,      Go forward a word           ) \
-	XX( 1, EDITOR_HOME,        Go to start of line         ) \
-	XX( 1, EDITOR_END,         Go to end of line           ) \
-	\
-	XX( 1, EDITOR_B_DELETE,    Delete last character       ) \
-	XX( 1, EDITOR_F_DELETE,    Delete next character       ) \
-	XX( 1, EDITOR_B_KILL_WORD, Delete last word            ) \
-	XX( 1, EDITOR_B_KILL_LINE, Delete everything up to BOL ) \
-	XX( 1, EDITOR_F_KILL_LINE, Delete everything up to EOL )
-
-enum action
-{
-#define XX(usable, name, description) ACTION_ ## name,
-	ACTIONS (XX)
-#undef XX
-	ACTION_COUNT
-};
-
-static struct action_info
-{
-	const char *name;                   ///< Name for user bindings
-	const char *description;            ///< Human-readable description
-	bool usable;                        ///< Usable?
-}
-g_actions[] =
-{
-#define XX(usable, name, description) { #name, #description, usable },
-	ACTIONS (XX)
-#undef XX
-};
-
-/// Accept a more human format of action-name instead of ACTION_NAME
-static int action_toupper (int c) { return c == '-' ? '_' : toupper_ascii (c); }
+#include "nncmpp-actions.h"
 
 static int
 action_resolve (const char *name)
 {
-	const unsigned char *s = (const unsigned char *) name;
 	for (int i = 0; i < ACTION_COUNT; i++)
-	{
-		const char *target = g_actions[i].name;
-		for (size_t k = 0; action_toupper (s[k]) == target[k]; k++)
-			if (!s[k] && !target[k])
-				return i;
-	}
+		if (!strcasecmp_ascii (g_action_names[i], name))
+			return i;
 	return -1;
 }
 
@@ -3943,9 +3840,6 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out,
 {
 	for (enum action i = 0; i < ACTION_COUNT; i++)
 	{
-		if (!g_actions[i].usable)
-			continue;
-
 		struct strv ass = strv_make ();
 		for (size_t k = 0; k < len; k++)
 			if (keys[k].action == i)
@@ -3954,7 +3848,7 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out,
 		{
 			char *joined = strv_join (&ass, ", ");
 			strv_append_owned (out, xstrdup_printf
-				("  %-30s %s", g_actions[i].description, joined));
+				("  %-30s %s", g_action_descriptions[i], joined));
 			free (joined);
 
 			bound[i] = true;
@@ -3971,7 +3865,7 @@ help_tab_unbound (struct strv *out, bool bound[ACTION_COUNT])
 		if (!bound[i])
 		{
 			strv_append_owned (out,
-				xstrdup_printf ("  %-30s", g_actions[i].description));
+				xstrdup_printf ("  %-30s", g_action_descriptions[i]));
 			help_tab_assign_action (i);
 		}
 }

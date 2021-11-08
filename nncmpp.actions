@@ -1,0 +1,71 @@
+#include "config.h"
+
+NONE,               Do nothing
+
+QUIT,               Quit
+REDRAW,             Redraw screen
+TAB_HELP,           Switch to help tab
+TAB_LAST,           Switch to last tab
+TAB_PREVIOUS,       Switch to previous tab
+TAB_NEXT,           Switch to next tab
+
+MPD_TOGGLE,         Toggle play/pause
+MPD_STOP,           Stop playback
+MPD_PREVIOUS,       Previous song
+MPD_NEXT,           Next song
+MPD_BACKWARD,       Seek backwards
+MPD_FORWARD,        Seek forwards
+MPD_VOLUME_UP,      Increase volume
+MPD_VOLUME_DOWN,    Decrease volume
+
+MPD_SEARCH,         Global search
+MPD_ADD,            Add selection to playlist
+MPD_REPLACE,        Replace playlist
+MPD_REPEAT,         Toggle repeat
+MPD_RANDOM,         Toggle random playback
+MPD_SINGLE,         Toggle single song playback
+MPD_CONSUME,        Toggle consume
+MPD_UPDATE_DB,      Update MPD database
+MPD_COMMAND,        Send raw command to MPD
+
+#ifdef WITH_PULSE
+PULSE_VOLUME_UP,    Increase PulseAudio volume
+PULSE_VOLUME_DOWN,  Decrease PulseAudio volume
+PULSE_MUTE,         Toggle mute of MPD PulseAudio sink
+#endif
+
+CHOOSE,             Choose item
+DELETE,             Delete item
+UP,                 Go up a level
+MULTISELECT,        Toggle multiselect
+
+SCROLL_UP,          Scroll up
+SCROLL_DOWN,        Scroll down
+MOVE_UP,            Move selection up
+MOVE_DOWN,          Move selection down
+
+GOTO_TOP,           Go to top
+GOTO_BOTTOM,        Go to bottom
+GOTO_ITEM_PREVIOUS, Go to previous item
+GOTO_ITEM_NEXT,     Go to next item
+GOTO_PAGE_PREVIOUS, Go to previous page
+GOTO_PAGE_NEXT,     Go to next page
+
+GOTO_VIEW_TOP,      Select top item
+GOTO_VIEW_CENTER,   Select center item
+GOTO_VIEW_BOTTOM,   Select bottom item
+
+EDITOR_CONFIRM,     Confirm input
+
+EDITOR_B_CHAR,      Go back a character
+EDITOR_F_CHAR,      Go forward a character
+EDITOR_B_WORD,      Go back a word
+EDITOR_F_WORD,      Go forward a word
+EDITOR_HOME,        Go to start of line
+EDITOR_END,         Go to end of line
+
+EDITOR_B_DELETE,    Delete last character
+EDITOR_F_DELETE,    Delete next character
+EDITOR_B_KILL_WORD, Delete last word
+EDITOR_B_KILL_LINE, Delete everything up to BOL
+EDITOR_F_KILL_LINE, Delete everything up to EOL

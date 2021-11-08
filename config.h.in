@@ -1,12 +1,11 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define PROGRAM_NAME "${CMAKE_PROJECT_NAME}"
+#define PROGRAM_NAME "${PROJECT_NAME}"
 #define PROGRAM_VERSION "${PROJECT_VERSION}"
 
 #cmakedefine HAVE_RESIZETERM
 #cmakedefine WITH_FFTW
 #cmakedefine WITH_PULSE
 
-#endif  // ! CONFIG_H
-
+#endif  /* ! CONFIG_H */
