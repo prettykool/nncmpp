@@ -15,8 +15,8 @@ MPD_PREVIOUS,       Previous song
 MPD_NEXT,           Next song
 MPD_BACKWARD,       Seek backwards
 MPD_FORWARD,        Seek forwards
-MPD_VOLUME_UP,      Increase volume
-MPD_VOLUME_DOWN,    Decrease volume
+MPD_VOLUME_UP,      Increase MPD volume
+MPD_VOLUME_DOWN,    Decrease MPD volume
 
 MPD_SEARCH,         Global search
 MPD_ADD,            Add selection to playlist
@@ -31,7 +31,7 @@ MPD_COMMAND,        Send raw command to MPD
 #ifdef WITH_PULSE
 PULSE_VOLUME_UP,    Increase PulseAudio volume
 PULSE_VOLUME_DOWN,  Decrease PulseAudio volume
-PULSE_MUTE,         Toggle mute of MPD PulseAudio sink
+PULSE_MUTE,         Toggle PulseAudio sink mute
 #endif
 
 CHOOSE,             Choose item
