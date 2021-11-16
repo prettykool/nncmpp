@@ -1243,6 +1243,7 @@ static struct app_context
 #ifdef WITH_PULSE
 	struct pulse pulse;                 ///< PulseAudio control
 #endif  // WITH_PULSE
+	bool pulse_control_requested;       ///< PulseAudio control desired by user
 
 	struct line_editor editor;          ///< Line editor
 	struct poller_idle refresh_event;   ///< Refresh the screen
@@ -1304,6 +1305,13 @@ on_poll_elapsed_time_changed (struct config_item *item)
 	g.elapsed_poll = item->value.boolean;
 }
 
+static void
+on_pulseaudio_changed (struct config_item *item)
+{
+	// This is only set once, on application startup
+	g.pulse_control_requested = item->value.boolean;
+}
+
 static struct config_schema g_config_settings[] =
 {
 	{ .name      = "address",
@@ -1340,6 +1348,7 @@ static struct config_schema g_config_settings[] =
 	{ .name      = "pulseaudio",
 	  .comment   = "Look up MPD in PulseAudio for improved volume controls",
 	  .type      = CONFIG_ITEM_BOOLEAN,
+	  .on_change = on_pulseaudio_changed,
 	  .default_  = "off" },
 #endif  // WITH_PULSE
 
@@ -1374,14 +1383,6 @@ get_config_string (struct config_item *root, const char *key)
 		return NULL;
 	hard_assert (config_item_type_is_string (item->type));
 	return item->value.string.str;
-}
-
-static bool
-get_config_boolean (struct config_item *root, const char *key)
-{
-	struct config_item *item = config_item_get (root, key, NULL);
-	hard_assert (item && item->type == CONFIG_ITEM_BOOLEAN);
-	return item->value.boolean;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1782,18 +1783,31 @@ app_draw_status (void)
 
 	// It gets a bit complicated due to the only right-aligned item on the row
 	struct str volume = str_make ();
-	int remaining = COLS - buf.total_width;
-	if (g.volume >= 0)
-	{
-		str_append (&volume, "  ");
 #ifdef WITH_PULSE
-		if (pulse_volume_status (&g.pulse, &volume))
-			str_append (&volume, " @ ");
-#endif  // WITH_PULSE
-		str_append_printf (&volume, "%3d%%", g.volume);
-		remaining -= volume.len;
-	}
+	if (g.pulse_control_requested)
+	{
+		struct str buf = str_make ();
+		if (pulse_volume_status (&g.pulse, &buf))
+		{
+			if (g.volume >= 0 && g.volume != 100)
+				str_append_printf (&buf, " (%d%%)", g.volume);
+		}
+		else
+		{
+			if (g.volume >= 0)
+				str_append_printf (&buf, "(%d%%)", g.volume);
+		}
+		if (buf.len)
+			str_append_printf (&volume, "  %s", buf.str);
 
+		str_free (&buf);
+	}
+	else
+#endif  // WITH_PULSE
+	if (g.volume >= 0)
+		str_append_printf (&volume, "  %3d%%", g.volume);
+
+	int remaining = COLS - buf.total_width - volume.len;
 	if (!stopped && g.song_elapsed >= 0 && g.song_duration >= 1
 	 && remaining > 0)
 	{
@@ -4173,7 +4187,7 @@ static void
 pulse_update (void)
 {
 	struct mpd_client *c = &g.client;
-	if (!get_config_boolean (g.config.root, "settings.pulseaudio"))
+	if (!g.pulse_control_requested)
 		return;
 
 	// The read permission is sufficient for this command
