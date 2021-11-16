@@ -45,28 +45,28 @@ snippet:
 
 ....
 settings = {
-	address    = "~/.mpd/mpd.socket"
-	password   = "<your password>"
-	root       = "~/Music"
-	pulseaudio = on
+  address    = "~/.mpd/mpd.socket"
+  password   = "<your password>"
+  root       = "~/Music"
+  pulseaudio = on
 }
 colors = {
-	normal      = ""
-	highlight   = "bold"
-	elapsed     = "reverse"
-	remains     = "ul"
-	tab_bar     = "reverse"
-	tab_active  = "ul"
-	even        = ""
-	odd         = ""
-	selection   = "reverse"
-	multiselect = "-1 6"
-	defocused   = "ul"
-	scrollbar   = ""
+  normal      = ""
+  highlight   = "bold"
+  elapsed     = "reverse"
+  remains     = "ul"
+  tab_bar     = "reverse"
+  tab_active  = "ul"
+  even        = ""
+  odd         = ""
+  selection   = "reverse"
+  multiselect = "-1 6"
+  defocused   = "ul"
+  scrollbar   = ""
 }
 streams = {
-	"dnbradio.com" = "http://www.dnbradio.com/hi.m3u"
-	"BassDrive.com" = "http://bassdrive.com/v2/streams/BassDrive.pls"
+  "dnbradio.com" = "http://www.dnbradio.com/hi.m3u"
+  "BassDrive.com" = "http://bassdrive.com/v2/streams/BassDrive.pls"
 }
 ....
 
@@ -87,11 +87,11 @@ need to set it up manually to match your MPD configuration, e.g.:
 
 ....
 settings = {
-	...
-	spectrum_path = "~/.mpd/mpd.fifo"  # "path"
-	spectrum_format = "44100:16:2"     # "format" (samplerate:bits:channels)
-	spectrum_bars = 8                  # beware of exponential complexity
-	...
+  ...
+  spectrum_path = "~/.mpd/mpd.fifo"  # "path"
+  spectrum_format = "44100:16:2"     # "format" (samplerate:bits:channels)
+  spectrum_bars = 8                  # beware of exponential complexity
+  ...
 }
 ....
 
