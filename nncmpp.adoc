@@ -47,7 +47,6 @@ snippet:
 settings = {
   address    = "~/.mpd/mpd.socket"
   password   = "<your password>"
-  root       = "~/Music"
   pulseaudio = on
 }
 colors = {
@@ -98,6 +97,28 @@ settings = {
 The sample rate should be greater than 40 kHz, the number of bits 8 or 16,
 and the number of channels doesn't matter, as they're simply averaged together.
 
+PulseAudio
+----------
+If you find standard MPD volume control useless, you may instead configure
+*nncmpp* to show and control the volume of any PulseAudio sink MPD is currently
+connected to.
+
+This feature may be enabled with the *settings.pulseaudio* configuration option,
+as in the snippet above.  To replace the default volume control bindings, use:
+
+....
+normal = {
+  "M-PageUp" = "pulse-volume-up"
+  "M-PageDown" = "pulse-volume-down"
+}
+....
+
+The respective actions may also be invoked from the help tab directly.
+
+For this to work, *nncmpp* needs to access the right PulseAudio daemon--in case
+your setup is unusual, consult the list of environment variables in
+*pulseaudio*(1).  MPD-compatibles are currently unsupported.
+
 Files
 -----
 *nncmpp* follows the XDG Base Directory Specification.
@@ -112,4 +133,4 @@ or submit pull requests.
 
 See also
 --------
-*mpd*(1)
+*mpd*(1), *pulseaudio*(1)
