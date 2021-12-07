@@ -4376,8 +4376,9 @@ mpd_id_of_pos (int pos)
 static void
 mpd_process_info (const struct strv *data)
 {
-	char *prev_sel_id  = xstrdup0 (mpd_id_of_pos (g_current_tab.item_selected));
-	char *prev_mark_id = xstrdup0 (mpd_id_of_pos (g_current_tab.item_mark));
+	struct tab *tab = &g_current_tab;
+	char *prev_sel_id  = xstrdup0 (mpd_id_of_pos (tab->item_selected));
+	char *prev_mark_id = xstrdup0 (mpd_id_of_pos (tab->item_mark));
 	char *fallback_id  = NULL;
 
 	struct tab_range r = tab_selection_range (g.active_tab);
@@ -4389,19 +4390,18 @@ mpd_process_info (const struct strv *data)
 
 	mpd_process_info_data (data);
 
-	const char *sel_id  = mpd_id_of_pos (g_current_tab.item_selected);
-	const char *mark_id = mpd_id_of_pos (g_current_tab.item_mark);
+	const char *sel_id  = mpd_id_of_pos (tab->item_selected);
+	const char *mark_id = mpd_id_of_pos (tab->item_mark);
 
 	if (prev_mark_id && (!mark_id || strcmp (prev_mark_id, mark_id)))
-		g_current_tab.item_mark = mpd_find_pos_of_id (prev_mark_id);
+		tab->item_mark = mpd_find_pos_of_id (prev_mark_id);
 	if (prev_sel_id  && (!sel_id  || strcmp (prev_sel_id,  sel_id)))
 	{
-		g_current_tab.item_selected = mpd_find_pos_of_id (prev_sel_id);
-		if (g_current_tab.item_selected < 0)
+		if ((tab->item_selected = mpd_find_pos_of_id (prev_sel_id)) < 0)
 		{
-			g_current_tab.item_mark = -1;
+			tab->item_mark = -1;
 			if (fallback_id)
-				g_current_tab.item_selected = mpd_find_pos_of_id (fallback_id);
+				tab->item_selected = mpd_find_pos_of_id (fallback_id);
 		}
 		app_move_selection (0);
 	}
