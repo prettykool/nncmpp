@@ -154,6 +154,8 @@ xbasename (const char *path)
 	return last_slash ? last_slash + 1 : path;
 }
 
+static char *xstrdup0 (const char *s) { return s ? xstrdup (s) : NULL; }
+
 static char *
 latin1_to_utf8 (const char *latin1)
 {
@@ -4364,7 +4366,7 @@ mpd_find_pos_of_id (const char *desired_id)
 	return -1;
 }
 
-static char *
+static const char *
 mpd_id_of_pos (int pos)
 {
 	compact_map_t map = item_list_get (&g.playlist, pos);
@@ -4374,24 +4376,21 @@ mpd_id_of_pos (int pos)
 static void
 mpd_process_info (const struct strv *data)
 {
-	int *selected = &g_current_tab.item_selected;
-	int *marked   = &g_current_tab.item_mark;
-	char *prev_sel_id  = mpd_id_of_pos (*selected);
-	char *prev_mark_id = mpd_id_of_pos (*marked);
-	if (prev_sel_id)   prev_sel_id  = xstrdup (prev_sel_id);
-	if (prev_mark_id)  prev_mark_id = xstrdup (prev_mark_id);
+	char *prev_sel_id  = xstrdup0 (mpd_id_of_pos (g_current_tab.item_selected));
+	char *prev_mark_id = xstrdup0 (mpd_id_of_pos (g_current_tab.item_mark));
 
 	mpd_process_info_data (data);
 
-	const char *sel_id  = mpd_id_of_pos (*selected);
-	const char *mark_id = mpd_id_of_pos (*marked);
+	const char *sel_id  = mpd_id_of_pos (g_current_tab.item_selected);
+	const char *mark_id = mpd_id_of_pos (g_current_tab.item_mark);
 
 	if (prev_mark_id && (!mark_id || strcmp (prev_mark_id, mark_id)))
-		*marked = mpd_find_pos_of_id (prev_mark_id);
+		g_current_tab.item_mark = mpd_find_pos_of_id (prev_mark_id);
 	if (prev_sel_id  && (!sel_id  || strcmp (prev_sel_id,  sel_id)))
 	{
-		if ((*selected = mpd_find_pos_of_id (prev_sel_id)) < 0)
-			*marked = -1;
+		g_current_tab.item_selected = mpd_find_pos_of_id (prev_sel_id);
+		if (g_current_tab.item_selected < 0)
+			g_current_tab.item_mark = -1;
 		app_move_selection (0);
 	}
 
