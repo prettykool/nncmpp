@@ -4378,6 +4378,14 @@ mpd_process_info (const struct strv *data)
 {
 	char *prev_sel_id  = xstrdup0 (mpd_id_of_pos (g_current_tab.item_selected));
 	char *prev_mark_id = xstrdup0 (mpd_id_of_pos (g_current_tab.item_mark));
+	char *fallback_id  = NULL;
+
+	struct tab_range r = tab_selection_range (g.active_tab);
+	if (r.upto >= 0)
+	{
+		if (!(fallback_id = xstrdup0 (mpd_id_of_pos (r.upto + 1))))
+			fallback_id = xstrdup0 (mpd_id_of_pos (r.from - 1));
+	}
 
 	mpd_process_info_data (data);
 
@@ -4390,12 +4398,17 @@ mpd_process_info (const struct strv *data)
 	{
 		g_current_tab.item_selected = mpd_find_pos_of_id (prev_sel_id);
 		if (g_current_tab.item_selected < 0)
+		{
 			g_current_tab.item_mark = -1;
+			if (fallback_id)
+				g_current_tab.item_selected = mpd_find_pos_of_id (fallback_id);
+		}
 		app_move_selection (0);
 	}
 
 	free (prev_sel_id);
 	free (prev_mark_id);
+	free (fallback_id);
 }
 
 static void
