@@ -1,3 +1,14 @@
+x.x.x (xxxx-xx-xx)
+
+ * Added ability to control the volume of MPD's current PulseAudio sink
+
+ * Now fetching Internet stream information asynchronously
+
+ * Added rudimentary incremental search, normally bound to C-s, in all tabs
+
+ * Fixed jumping to the beginning of the queue after deleting items
+
+
 1.1.1 (2021-11-04)
 
  * Terminal focus in/out events no longer ring the terminall bell
