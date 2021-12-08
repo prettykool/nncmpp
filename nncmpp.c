@@ -282,6 +282,10 @@ struct poller_curl
 	struct poller_timer timer;          ///< cURL timer
 	CURLM *multi;                       ///< cURL multi interface handle
 	struct poller_curl_fd *fds;         ///< List of all FDs
+
+	// TODO: also make sure to dispose of them at the end of the program
+
+	int registered;                     ///< Number of attached easy handles
 };
 
 static void
@@ -390,6 +394,7 @@ poller_curl_init (struct poller_curl *self, struct poller *poller,
 	 || (mres = curl_multi_setopt (self->multi, CURLMOPT_TIMERDATA, self)))
 	{
 		curl_multi_cleanup (self->multi);
+		self->multi = NULL;
 		return error_set (e, "%s: %s",
 			"cURL setup failed", curl_multi_strerror (mres));
 	}
@@ -450,6 +455,7 @@ poller_curl_add (struct poller_curl *self, CURL *easy, struct error **e)
 	// "CURLMOPT_TIMERFUNCTION [...] will be called from within this function"
 	if ((mres = curl_multi_add_handle (self->multi, easy)))
 		return error_set (e, "%s", curl_multi_strerror (mres));
+	self->registered++;
 	return true;
 }
 
@@ -459,6 +465,7 @@ poller_curl_remove (struct poller_curl *self, CURL *easy, struct error **e)
 	CURLMcode mres;
 	if ((mres = curl_multi_remove_handle (self->multi, easy)))
 		return error_set (e, "%s", curl_multi_strerror (mres));
+	self->registered--;
 	return true;
 }
 
@@ -1184,6 +1191,7 @@ static struct app_context
 	// Event loop:
 
 	struct poller poller;               ///< Poller
+	struct poller_curl poller_curl;     ///< cURL abstractor
 	bool quitting;                      ///< Quit signal for the event loop
 	bool polling;                       ///< The event loop is running
 
@@ -1500,6 +1508,7 @@ static void
 app_init_context (void)
 {
 	poller_init (&g.poller);
+	hard_assert (poller_curl_init (&g.poller_curl, &g.poller, NULL));
 	g.client = mpd_client_make (&g.poller);
 	g.config = config_make ();
 	g.streams = strv_make ();
@@ -1588,6 +1597,7 @@ app_free_context (void)
 	line_editor_free (&g.editor);
 
 	config_free (&g.config);
+	poller_curl_free (&g.poller_curl);
 	poller_free (&g.poller);
 	free (g.message);
 
@@ -3512,8 +3522,8 @@ struct stream_tab_task
 {
 	struct poller_curl_task curl;       ///< Superclass
 	struct str data;                    ///< Downloaded data
-	bool polling;                       ///< Still downloading
 	bool replace;                       ///< Should playlist be replaced?
+	struct curl_slist *alias_ok;
 };
 
 static bool
@@ -3598,23 +3608,38 @@ streams_tab_extract_links (struct str *data, const char *content_type,
 }
 
 static void
+streams_tab_task_finalize (struct stream_tab_task *self)
+{
+	curl_easy_cleanup (self->curl.easy);
+	curl_slist_free_all (self->alias_ok);
+	str_free (&self->data);
+	free (self);
+}
+
+static void
+streams_tab_task_dispose (struct stream_tab_task *self)
+{
+	hard_assert (poller_curl_remove (&g.poller_curl, self->curl.easy, NULL));
+	streams_tab_task_finalize (self);
+}
+
+static void
 streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 {
 	struct stream_tab_task *self =
 		CONTAINER_OF (task, struct stream_tab_task, curl);
-	self->polling = false;
 
 	if (msg->data.result
 	 && msg->data.result != CURLE_WRITE_ERROR)
 	{
 		cstr_uncapitalize (self->curl.curl_error);
 		print_error ("%s", self->curl.curl_error);
-		return;
+		goto dispose;
 	}
 
 	struct mpd_client *c = &g.client;
 	if (c->state != MPD_CONNECTED)
-		return;
+		goto dispose;
 
 	CURL *easy = msg->easy_handle;
 	CURLcode res;
@@ -3627,13 +3652,13 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	{
 		print_error ("%s: %s",
 			"cURL info retrieval failed", curl_easy_strerror (res));
-		return;
+		goto dispose;
 	}
 	// cURL is not willing to parse the ICY header, the code is zero then
 	if (code && code != 200)
 	{
 		print_error ("%s: %ld", "unexpected HTTP response", code);
-		return;
+		goto dispose;
 	}
 
 	mpd_client_list_begin (c);
@@ -3652,6 +3677,9 @@ streams_tab_on_downloaded (CURLMsg *msg, struct poller_curl_task *task)
 	mpd_client_list_end (c);
 	mpd_client_add_task (c, mpd_on_simple_response, NULL);
 	mpd_client_idle (c, 0);
+
+dispose:
+	streams_tab_task_dispose (self);
 }
 
 static size_t
@@ -3670,60 +3698,44 @@ write_callback (char *ptr, size_t size, size_t nmemb, void *user_data)
 static bool
 streams_tab_process (const char *uri, bool replace, struct error **e)
 {
-	struct poller poller;
-	poller_init (&poller);
+	// TODO: streams_tab_task_dispose() on that running task
+	if (g.poller_curl.registered)
+	{
+		print_error ("waiting for the last stream to time out");
+		return false;
+	}
 
-	struct poller_curl pc;
-	hard_assert (poller_curl_init (&pc, &poller, NULL));
-	struct stream_tab_task task;
-	hard_assert (poller_curl_spawn (&task.curl, NULL));
+	struct stream_tab_task *task = xcalloc (1, sizeof *task);
+	hard_assert (poller_curl_spawn (&task->curl, NULL));
 
-	CURL *easy = task.curl.easy;
-	task.data = str_make ();
-	task.replace = replace;
-	bool result = false;
-
-	struct curl_slist *ok_headers = curl_slist_append (NULL, "ICY 200 OK");
+	CURL *easy = task->curl.easy;
+	task->data = str_make ();
+	task->replace = replace;
+	task->alias_ok = curl_slist_append (NULL, "ICY 200 OK");
 
 	CURLcode res;
 	if ((res = curl_easy_setopt (easy, CURLOPT_FOLLOWLOCATION, 1L))
 	 || (res = curl_easy_setopt (easy, CURLOPT_NOPROGRESS,     1L))
-	// TODO: make the timeout a bit larger once we're asynchronous
-	 || (res = curl_easy_setopt (easy, CURLOPT_TIMEOUT,        5L))
+	 || (res = curl_easy_setopt (easy, CURLOPT_TIMEOUT,        10L))
 	// Not checking anything, we just want some data, any data
 	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYPEER, 0L))
 	 || (res = curl_easy_setopt (easy, CURLOPT_SSL_VERIFYHOST, 0L))
 	 || (res = curl_easy_setopt (easy, CURLOPT_URL,            uri))
-	 || (res = curl_easy_setopt (easy, CURLOPT_HTTP200ALIASES, ok_headers))
+	 || (res = curl_easy_setopt (easy, CURLOPT_HTTP200ALIASES, task->alias_ok))
 
 	 || (res = curl_easy_setopt (easy, CURLOPT_VERBOSE, (long) g_debug_mode))
 	 || (res = curl_easy_setopt (easy, CURLOPT_DEBUGFUNCTION, print_curl_debug))
-	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEDATA, &task.data))
+	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEDATA, &task->data))
 	 || (res = curl_easy_setopt (easy, CURLOPT_WRITEFUNCTION, write_callback)))
 	{
 		error_set (e, "%s: %s", "cURL setup failed", curl_easy_strerror (res));
-		goto error;
+		streams_tab_task_finalize (task);
+		return false;
 	}
 
-	task.curl.on_done = streams_tab_on_downloaded;
-	hard_assert (poller_curl_add (&pc, task.curl.easy, NULL));
-
-	// TODO: don't run a subloop, run the task fully asynchronously
-	task.polling = true;
-	while (task.polling)
-		poller_run (&poller);
-
-	hard_assert (poller_curl_remove (&pc, task.curl.easy, NULL));
-	result = true;
-
-error:
-	curl_easy_cleanup (task.curl.easy);
-	curl_slist_free_all (ok_headers);
-	str_free (&task.data);
-	poller_curl_free (&pc);
-
-	poller_free (&poller);
-	return result;
+	task->curl.on_done = streams_tab_on_downloaded;
+	hard_assert (poller_curl_add (&g.poller_curl, task->curl.easy, NULL));
+	return true;
 }
 
 static bool
