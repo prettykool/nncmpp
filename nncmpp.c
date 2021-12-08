@@ -2089,6 +2089,8 @@ app_write_mpd_status (struct row_buffer *buf)
 		row_buffer_append (buf, msg, APP_ATTR (HIGHLIGHT));
 		free (msg);
 	}
+	else if (g.poller_curl.registered)
+		row_buffer_append (buf, "Downloading...", APP_ATTR (NORMAL));
 	else if (str_map_find (map, "updating_db"))
 		row_buffer_append (buf, "Updating database...", APP_ATTR (NORMAL));
 	else
