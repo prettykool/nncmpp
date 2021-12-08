@@ -2319,7 +2319,7 @@ app_setvol (int value)
 }
 
 static void
-app_on_editor_end (bool confirmed)
+app_on_mpd_command_editor_end (bool confirmed)
 {
 	struct mpd_client *c = &g.client;
 	if (!confirmed)
@@ -2332,6 +2332,49 @@ app_on_editor_end (bool confirmed)
 
 	mpd_client_add_task (c, mpd_on_simple_response, NULL);
 	mpd_client_idle (c, 0);
+}
+
+static size_t
+incremental_search_match (const ucs4_t *needle, size_t len,
+	const struct row_buffer *row)
+{
+	// TODO: case-insensitive search, wilcards, regexps, something easy to use
+	size_t i = 0;
+	for (; i < len && i < row->chars_len; i++)
+		if (needle[i] != row->chars[i].c)
+			break;
+	return i;
+}
+
+static void
+incremental_search_on_changed (void)
+{
+	struct tab *tab = g.active_tab;
+	if (!tab->item_count)
+		return;
+
+	size_t best = 0, current = 0, index = MAX (tab->item_selected, 0), i = 0;
+	while (i++ < tab->item_count)
+	{
+		struct row_buffer buf = row_buffer_make ();
+		tab->on_item_draw (index, &buf, COLS);
+		current = incremental_search_match (g.editor.line, g.editor.len, &buf);
+		row_buffer_free (&buf);
+		if (best < current)
+		{
+			best = current;
+			tab->item_selected = index;
+			app_move_selection (0);
+		}
+		index = (index + 1) % tab->item_count;
+	}
+}
+
+static void
+incremental_search_on_end (bool confirmed)
+{
+	(void) confirmed;
+	// Required callback, nothing to do here.
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2376,7 +2419,7 @@ app_process_action (enum action action)
 		return true;
 	case ACTION_MPD_COMMAND:
 		line_editor_start (&g.editor, ':');
-		g.editor.on_end = app_on_editor_end;
+		g.editor.on_end = app_on_mpd_command_editor_end;
 		app_invalidate ();
 		return true;
 	default:
@@ -2392,6 +2435,12 @@ app_process_action (enum action action)
 			tab->item_mark = -1;
 		else
 			tab->item_mark = tab->item_selected;
+		return true;
+	case ACTION_INCREMENTAL_SEARCH:
+		line_editor_start (&g.editor, '/');
+		g.editor.on_changed = incremental_search_on_changed;
+		g.editor.on_end = incremental_search_on_end;
+		app_invalidate ();
 		return true;
 
 	case ACTION_TAB_LAST:
@@ -2683,6 +2732,7 @@ g_normal_defaults[] =
 	{ "M-Up",       ACTION_UP                 },
 	{ "Backspace",  ACTION_UP                 },
 	{ "v",          ACTION_MULTISELECT        },
+	{ "C-s",        ACTION_INCREMENTAL_SEARCH },
 	{ "/",          ACTION_MPD_SEARCH         },
 	{ "a",          ACTION_MPD_ADD            },
 	{ "r",          ACTION_MPD_REPLACE        },

@@ -38,6 +38,7 @@ CHOOSE,             Choose item
 DELETE,             Delete item
 UP,                 Go up a level
 MULTISELECT,        Toggle multiselect
+INCREMENTAL_SEARCH, Incremental search
 
 SCROLL_UP,          Scroll up
 SCROLL_DOWN,        Scroll down
