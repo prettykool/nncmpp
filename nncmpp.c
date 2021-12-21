@@ -2350,12 +2350,17 @@ static size_t
 incremental_search_match (const ucs4_t *needle, size_t len,
 	const struct row_buffer *row)
 {
-	// TODO: case-insensitive search, wilcards, regexps, something easy to use
-	size_t i = 0;
-	for (; i < len && i < row->chars_len; i++)
-		if (needle[i] != row->chars[i].c)
-			break;
-	return i;
+	// XXX: this is slow and simplistic, but unistring is awkward to use
+	size_t best = 0;
+	for (size_t start = 0; start < row->chars_len; start++)
+	{
+		size_t i = 0;
+		for (; i < len && start + i < row->chars_len; i++)
+			if (uc_tolower(needle[i]) != uc_tolower(row->chars[start + i].c))
+				break;
+		best = MAX (best, i);
+	}
+	return best;
 }
 
 static void
