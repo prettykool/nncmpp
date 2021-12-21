@@ -2356,7 +2356,7 @@ incremental_search_match (const ucs4_t *needle, size_t len,
 	{
 		size_t i = 0;
 		for (; i < len && start + i < row->chars_len; i++)
-			if (uc_tolower(needle[i]) != uc_tolower(row->chars[start + i].c))
+			if (uc_tolower (needle[i]) != uc_tolower (row->chars[start + i].c))
 				break;
 		best = MAX (best, i);
 	}
