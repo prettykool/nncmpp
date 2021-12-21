@@ -1,4 +1,4 @@
-x.x.x (xxxx-xx-xx)
+1.2.0 (2021-12-21)
 
  * Added ability to control the volume of MPD's current PulseAudio sink
 
