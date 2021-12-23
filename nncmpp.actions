@@ -42,6 +42,7 @@ INCREMENTAL_SEARCH, Incremental search
 
 SCROLL_UP,          Scroll up
 SCROLL_DOWN,        Scroll down
+CENTER_CURSOR,      Center the cursor
 MOVE_UP,            Move selection up
 MOVE_DOWN,          Move selection down
 

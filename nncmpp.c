@@ -2213,6 +2213,19 @@ app_ensure_selection_visible (void)
 }
 
 static bool
+app_center_cursor (void)
+{
+	struct tab *tab = g.active_tab;
+	if (tab->item_selected < 0 || !tab->item_count)
+		return false;
+
+	int offset = tab->item_selected - tab->item_top;
+	int target = app_visible_items () / 2;
+	app_scroll (offset - target);
+	return true;
+}
+
+static bool
 app_move_selection (int diff)
 {
 	struct tab *tab = g.active_tab;
@@ -2509,9 +2522,10 @@ app_process_action (enum action action)
 	case ACTION_PULSE_MUTE:             return pulse_volume_mute (&g.pulse);
 #endif  // WITH_PULSE
 
-		// XXX: these should rather be parametrized
+		// XXX: these two should rather be parametrized
 	case ACTION_SCROLL_UP:              return app_scroll (-3);
-	case ACTION_SCROLL_DOWN:            return app_scroll  (3);
+	case ACTION_SCROLL_DOWN:            return app_scroll (+3);
+	case ACTION_CENTER_CURSOR:          return app_center_cursor ();
 
 	case ACTION_GOTO_TOP:
 		if (tab->item_count)
@@ -2737,6 +2751,7 @@ g_normal_defaults[] =
 	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
 	{ "C-y",        ACTION_SCROLL_UP          },
 	{ "C-e",        ACTION_SCROLL_DOWN        },
+	{ "z",          ACTION_CENTER_CURSOR      },
 
 	{ "H",          ACTION_GOTO_VIEW_TOP      },
 	{ "M",          ACTION_GOTO_VIEW_CENTER   },
