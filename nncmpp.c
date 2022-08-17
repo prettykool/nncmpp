@@ -1,7 +1,7 @@
 /*
  * nncmpp -- the MPD client you never knew you needed
  *
- * Copyright (c) 2016 - 2021, Přemysl Eric Janouch <p@janouch.name>
+ * Copyright (c) 2016 - 2022, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -107,30 +107,20 @@ enum
 #include <pulse/sample.h>
 #endif  // WITH_PULSE
 
+// Elementary port of the TUI to X11.
+#ifdef WITH_X11
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <X11/XKBlib.h>
+#include <X11/Xft/Xft.h>
+#include <xkbcommon/xkbcommon.h>
+#endif  // WITH_X11
+
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
-// --- Utilities ---------------------------------------------------------------
+#include "nncmpp-actions.h"
 
-// The standard endwin/refresh sequence makes the terminal flicker
-static void
-update_curses_terminal_size (void)
-{
-#if defined HAVE_RESIZETERM && defined TIOCGWINSZ
-	struct winsize size;
-	if (!ioctl (STDOUT_FILENO, TIOCGWINSZ, (char *) &size))
-	{
-		char *row = getenv ("LINES");
-		char *col = getenv ("COLUMNS");
-		unsigned long tmp;
-		resizeterm (
-			(row && xstrtoul (&tmp, row, 10)) ? tmp : size.ws_row,
-			(col && xstrtoul (&tmp, col, 10)) ? tmp : size.ws_col);
-	}
-#else  // HAVE_RESIZETERM && TIOCGWINSZ
-	endwin ();
-	refresh ();
-#endif  // HAVE_RESIZETERM && TIOCGWINSZ
-}
+// --- Utilities ---------------------------------------------------------------
 
 static int64_t
 clock_msec (clockid_t clock)
@@ -600,7 +590,8 @@ struct spectrum
 	int samples;                        ///< Number of windows to average
 	float accumulator_scale;            ///< Scaling factor for accum. values
 	int *top_bins;                      ///< Top DFT bin index for each bar
-	char *spectrum;                     ///< String buffer for the "render"
+	char *rendered;                     ///< String buffer for the "render"
+	float *spectrum;                    ///< The "render" as normalized floats
 
 	void *buffer;                       ///< Input buffer
 	size_t buffer_len;                  ///< Input buffer fill level
@@ -722,7 +713,7 @@ spectrum_sample (struct spectrum *s)
 	}
 
 	int last_bin = 0;
-	char *p = s->spectrum;
+	char *p = s->rendered;
 	for (int bar = 0; bar < s->bars; bar++)
 	{
 		int top_bin = s->top_bins[bar];
@@ -740,9 +731,13 @@ spectrum_sample (struct spectrum *s)
 			db = 0;
 
 		// Assuming decibels are always negative (i.e., properly normalized).
-		// The division defines the cutoff: 9 * 7 = 63 dB of range.
+		// The division defines the cutoff: 8 * 7 = 56 dB of range.
 		int height = N_ELEMENTS (spectrum_bars) - 1 + (int) (db / 7);
 		p += strlen (strcpy (p, spectrum_bars[MAX (height, 0)]));
+
+		// Even with slightly the higher display resolutions provided by X11,
+		// 60 dB roughly covers the useful range.
+		s->spectrum[bar] = MAX (0, 1 + db / 60);
 	}
 }
 
@@ -814,7 +809,8 @@ spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
 	s->useful_bins = s->bins / 2;
 
 	int used_bins = necessary_bins / 2;
-	s->spectrum = xcalloc (sizeof *s->spectrum, s->bars * 3 + 1);
+	s->rendered = xcalloc (sizeof *s->rendered, s->bars * 3 + 1);
+	s->spectrum = xcalloc (sizeof *s->spectrum, s->bars);
 	s->top_bins = xcalloc (sizeof *s->top_bins, s->bars);
 	for (int bar = 0; bar < s->bars; bar++)
 	{
@@ -867,6 +863,7 @@ spectrum_free (struct spectrum *s)
 	free (s->data);
 	free (s->window);
 
+	free (s->rendered);
 	free (s->spectrum);
 	free (s->top_bins);
 	free (s->buffer);
@@ -1128,43 +1125,136 @@ pulse_volume_status (struct pulse *self, struct str *s)
 
 // --- Application -------------------------------------------------------------
 
-// Function names are prefixed mostly because of curses which clutters the
+// Function names are prefixed mostly because of curses, which clutters the
 // global namespace and makes it harder to distinguish what functions relate to.
 
 // The user interface is focused on conceptual simplicity.  That is important
-// since we're not using any TUI framework (which are mostly a lost cause to me
-// in the post-Unicode era and not worth pursuing), and the code would get
-// bloated and incomprehensible fast.  We mostly rely on "row_buffer" to write
-// text from left to right row after row while keeping track of cells.
+// since we use a custom toolkit, so code would get bloated rather fast--
+// especially given our TUI/GUI duality.
 //
 // There is an independent top pane displaying general status information,
 // followed by a tab bar and a listview served by a per-tab event handler.
 //
 // For simplicity, the listview can only work with items that are one row high.
 
+// Widget identification, mostly for mouse events.
+enum
+{
+	WIDGET_NONE = 0, WIDGET_BUTTON, WIDGET_GAUGE, WIDGET_TAB, WIDGET_SPECTRUM,
+	WIDGET_LIST, WIDGET_SCROLLBAR,
+};
+
+struct widget;
+
+/// Draw a widget on the window
+typedef void (*widget_render_fn) (struct widget *self);
+
+/// A minimal abstraction appropriate for both TUI and GUI widgets.
+/// Units for the widget's region are frontend-specific.
+/// Having this as a linked list simplifies layouting and memory management.
+struct widget
+{
+	LIST_HEADER (struct widget)
+
+	int x;                              ///< X coordinate
+	int y;                              ///< Y coordinate
+	int width;                          ///< Width, initialized by UI methods
+	int height;                         ///< Height, initialized by UI methods
+
+	widget_render_fn on_render;         ///< Render callback
+	chtype attrs;                       ///< Rendition, in Curses terms
+
+	short id;                           ///< Post-layouting identification
+	short subid;                        ///< Action ID/Tab index/...
+	char text[];                        ///< Any text label
+};
+
+struct layout
+{
+	struct widget *head;
+	struct widget *tail;
+};
+
+struct ui
+{
+	struct widget *(*padding) (chtype attrs, float width, float height);
+	struct widget *(*label) (chtype attrs, const char *label);
+	struct widget *(*button) (chtype attrs, const char *label, enum action a);
+	struct widget *(*gauge) (chtype attrs);
+	struct widget *(*spectrum) (chtype attrs, int width);
+	struct widget *(*scrollbar) (chtype attrs);
+	struct widget *(*list) (void);
+	struct widget *(*editor) (chtype attrs);
+
+	void (*render) (void);
+	void (*flip) (void);
+	void (*winch) (void);
+	void (*destroy) (void);
+
+	bool have_icons;
+};
+
+/// Replaces negative widths amongst widgets in the sublist by redistributing
+/// any width remaining after all positive claims are satisfied from "width".
+/// Also unifies heights to the maximum value of the run, and returns it.
+/// Then the widths are taken as final, and used to initialize X coordinates.
+static int
+widget_redistribute (struct widget *head, int width)
+{
+	int parts = 0, max_height = 0;
+	LIST_FOR_EACH (struct widget, w, head)
+	{
+		max_height = MAX (max_height, w->height);
+		if (w->width < 0)
+			parts -= w->width;
+		else
+			width -= w->width;
+	}
+
+	int remaining = MAX (width, 0), part_width = parts ? remaining / parts : 0;
+	struct widget *last = NULL;
+	LIST_FOR_EACH (struct widget, w, head)
+	{
+		w->height = max_height;
+		if (w->width < 0)
+		{
+			remaining -= (w->width *= -part_width);
+			last = w;
+		}
+	}
+	if (last)
+		last->width += remaining;
+
+	int x = 0;
+	LIST_FOR_EACH (struct widget, w, head)
+	{
+		w->x = x;
+		x += w->width;
+	}
+	return max_height;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 struct tab;
-enum action;
 
 /// Try to handle an action in the tab
 typedef bool (*tab_action_fn) (enum action action);
 
-/// Draw an item to the screen using the row buffer API
-typedef void (*tab_item_draw_fn)
-	(size_t item_index, struct row_buffer *buffer, int width);
+/// Return a line of widgets for the row
+typedef struct layout (*tab_item_layout_fn) (size_t item_index);
 
 struct tab
 {
 	LIST_HEADER (struct tab)
 
 	char *name;                         ///< Visible identifier
-	size_t name_width;                  ///< Visible width of the name
-
 	char *header;                       ///< The header, should there be any
 
 	// Implementation:
 
 	tab_action_fn on_action;            ///< User action handler callback
-	tab_item_draw_fn on_item_draw;      ///< Item draw callback
+	tab_item_layout_fn on_item_layout;  ///< Item layout callback
 
 	// Provided by tab owner:
 
@@ -1213,7 +1303,6 @@ static struct app_context
 	int64_t elapsed_since;              ///< Last tick ts or last elapsed time
 	bool elapsed_poll;                  ///< Poll MPD for the elapsed time?
 
-	// TODO: initialize these to -1
 	int song;                           ///< Current song index
 	int song_elapsed;                   ///< Song elapsed in seconds
 	int song_duration;                  ///< Song duration in seconds
@@ -1234,19 +1323,19 @@ static struct app_context
 	struct tab *active_tab;             ///< Active tab
 	struct tab *last_tab;               ///< Previous tab
 
-	// Emulated widgets:
+	// User interface:
 
-	int header_height;                  ///< Height of the header
-
-	int tabs_offset;                    ///< Offset to tabs or -1
-	int controls_offset;                ///< Offset to player controls or -1
-	int gauge_offset;                   ///< Offset to the gauge or -1
-	int gauge_width;                    ///< Width of the gauge, if present
+	struct ui *ui;                      ///< User interface interface
+	struct layout widgets;              ///< Layouted widgets
+	int ui_width;                       ///< Window width
+	int ui_height;                      ///< Window height
+	int ui_hunit;                       ///< Horizontal unit
+	int ui_vunit;                       ///< Vertical unit
+	bool ui_focused;                    ///< Whether the window has focus
 
 #ifdef WITH_FFTW
 	struct spectrum spectrum;           ///< Spectrum analyser
 	int spectrum_fd;                    ///< FIFO file descriptor (non-blocking)
-	int spectrum_column, spectrum_row;  ///< Position for fast refresh
 	struct poller_fd spectrum_event;    ///< FIFO watcher
 #endif  // WITH_FFTW
 
@@ -1255,16 +1344,32 @@ static struct app_context
 #endif  // WITH_PULSE
 	bool pulse_control_requested;       ///< PulseAudio control desired by user
 
+#ifdef WITH_X11
+	Display *dpy;                       ///< X display handle
+	struct poller_fd x11_event;         ///< X11 events on wire
+	struct poller_idle xpending_event;  ///< X11 events possibly in I/O queues
+	int xkb_base_event_code;            ///< Xkb base event code
+	Window x11_window;                  ///< Application window
+	Pixmap x11_pixmap;                  ///< Off-screen bitmap
+	Picture x11_pixmap_picture;         ///< XRender wrap for x11_pixmap
+	XftDraw *xft_draw;                  ///< Xft rendering context
+	XftFont *xft_regular;               ///< Regular font
+	XftFont *xft_bold;                  ///< Bold font
+
+	XRenderColor x_fg[ATTRIBUTE_COUNT]; ///< Foreground per attribute
+	XRenderColor x_bg[ATTRIBUTE_COUNT]; ///< Background per attribute
+#endif  // WITH_X11
+
 	struct line_editor editor;          ///< Line editor
-	struct poller_idle refresh_event;   ///< Refresh the screen
+	struct poller_idle refresh_event;   ///< Refresh the window's contents
+	struct poller_idle flip_event;      ///< Draw rendered widgets on screen
 
 	// Terminal:
 
-	termo_t *tk;                        ///< termo handle
+	termo_t *tk;                        ///< termo handle (TUI/X11)
 	struct poller_timer tk_timer;       ///< termo timeout timer
 	bool locale_is_utf8;                ///< The locale is Unicode
 	bool use_partial_boxes;             ///< Use Unicode box drawing chars
-	bool focused;                       ///< Whether the terminal has focus
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
@@ -1282,9 +1387,6 @@ tab_init (struct tab *self, const char *name)
 
 	// Add some padding for decorative purposes
 	self->name = xstrdup_printf (" %s ", name);
-	// Assuming tab names are pure ASCII, otherwise this would be inaccurate
-	// and we'd need to filter it first to replace invalid chars with '?'
-	self->name_width = u8_strwidth ((uint8_t *) self->name, locale_charset ());
 	self->item_selected = 0;
 	self->item_mark = -1;
 }
@@ -1361,6 +1463,13 @@ static struct config_schema g_config_settings[] =
 	  .on_change = on_pulseaudio_changed,
 	  .default_  = "off" },
 #endif  // WITH_PULSE
+
+#ifdef WITH_X11
+	{ .name      = "x11_font",
+	  .comment   = "Fontconfig name/pattern for the X11 font to use",
+	  .type      = CONFIG_ITEM_STRING,
+	  .default_  = "`sans\\-serif-11`" },
+#endif  // WITH_X11
 
 	// Disabling this minimises MPD traffic and has the following caveats:
 	//  - when MPD stalls on retrieving audio data, we keep ticking
@@ -1510,22 +1619,26 @@ app_init_context (void)
 	poller_init (&g.poller);
 	hard_assert (poller_curl_init (&g.poller_curl, &g.poller, NULL));
 	g.client = mpd_client_make (&g.poller);
+	g.song_elapsed = g.song_duration = g.volume = g.song = -1;
+	g.playlist = item_list_make ();
 	g.config = config_make ();
 	g.streams = strv_make ();
 	g.enqueue = strv_make ();
-	g.playlist = item_list_make ();
 
 	g.playback_info = str_map_make (free);
 	g.playback_info.key_xfrm = tolower_ascii_strxfrm;
 
 #ifdef WITH_FFTW
 	g.spectrum_fd = -1;
-	g.spectrum_row = g.spectrum_column = -1;
 #endif  // WITH_FFTW
 
 #ifdef WITH_PULSE
 	pulse_init (&g.pulse, NULL);
 #endif  // WITH_PULSE
+
+	TERMO_CHECK_VERSION;
+	if (!(g.tk = termo_new (STDIN_FILENO, NULL, TERMO_FLAG_NOSTART)))
+		exit_fatal ("failed to initialize termo");
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
@@ -1537,40 +1650,9 @@ app_init_context (void)
 	g.use_partial_boxes = g.locale_is_utf8;
 
 	// Presumably, although not necessarily; unsure if queryable at all
-	g.focused = true;
+	g.ui_focused = true;
 
 	app_init_attributes ();
-}
-
-static void
-app_init_terminal (void)
-{
-	TERMO_CHECK_VERSION;
-	if (!(g.tk = termo_new (STDIN_FILENO, NULL, 0)))
-		exit_fatal ("failed to set up the terminal");
-	if (!initscr () || nonl () == ERR)
-		exit_fatal ("failed to set up the terminal");
-
-	// By default we don't use any colors so they're not required...
-	if (start_color () == ERR
-	 || use_default_colors () == ERR
-	 || COLOR_PAIRS <= ATTRIBUTE_COUNT)
-		return;
-
-	for (int a = 0; a < ATTRIBUTE_COUNT; a++)
-	{
-		// ...thus we can reset back to defaults even after initializing some
-		// FIXME: that's a lie now, MULTISELECT requires a colour
-		if (g.attrs[a].fg >= COLORS || g.attrs[a].fg < -1
-		 || g.attrs[a].bg >= COLORS || g.attrs[a].bg < -1)
-		{
-			app_init_attributes ();
-			return;
-		}
-
-		init_pair (a + 1, g.attrs[a].fg, g.attrs[a].bg);
-		g.attrs[a].attrs |= COLOR_PAIR (a + 1);
-	}
 }
 
 static void
@@ -1634,7 +1716,7 @@ app_is_character_in_locale (ucs4_t ch)
 	return true;
 }
 
-// --- Rendering ---------------------------------------------------------------
+// --- Layouting ---------------------------------------------------------------
 
 static void
 app_invalidate (void)
@@ -1643,50 +1725,75 @@ app_invalidate (void)
 }
 
 static void
-app_flush_buffer (struct row_buffer *buf, int width, chtype attrs)
+app_flush_layout (struct layout *l)
 {
-	row_buffer_align (buf, width, attrs);
-	row_buffer_flush (buf);
-	row_buffer_free (buf);
+	hard_assert (l != NULL && l->head != NULL);
+	widget_redistribute (l->head, g.ui_width);
+
+	struct widget *last = g.widgets.tail;
+	if (!last)
+		g.widgets = *l;
+	else
+	{
+		// Assuming there is no unclaimed vertical space.
+		LIST_FOR_EACH (struct widget, w, l->head)
+			w->y = last->y + last->height;
+
+		last->next = l->head;
+		l->head->prev = last;
+		g.widgets.tail = l->tail;
+	}
+}
+
+static struct widget *
+app_push (struct layout *l, struct widget *w)
+{
+	LIST_APPEND_WITH_TAIL (l->head, l->tail, w);
+	return w;
+}
+
+static struct widget *
+app_push_fill (struct layout *l, struct widget *w)
+{
+	w->width = -1;
+	LIST_APPEND_WITH_TAIL (l->head, l->tail, w);
+	return w;
 }
 
 /// Write the given UTF-8 string padded with spaces.
 /// @param[in] attrs  Text attributes for the text, including padding.
 static void
-app_write_line (const char *str, chtype attrs)
+app_layout_text (const char *str, chtype attrs)
 {
-	struct row_buffer buf = row_buffer_make ();
-	row_buffer_append (&buf, str, attrs);
-	app_flush_buffer (&buf, COLS, attrs);
+	struct layout l = {};
+	app_push (&l, g.ui->padding (attrs, 0.25, 1));
+	app_push_fill (&l, g.ui->label (attrs, str));
+	app_push (&l, g.ui->padding (attrs, 0.25, 1));
+	app_flush_layout (&l);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
-app_flush_header (struct row_buffer *buf, chtype attrs)
-{
-	move (g.header_height++, 0);
-	app_flush_buffer (buf, COLS, attrs);
-}
-
-static void
-app_draw_song_info (void)
+app_layout_song_info (void)
 {
 	compact_map_t map;
 	if (!(map = item_list_get (&g.playlist, g.song)))
 		return;
 
-	chtype attr_normal    = APP_ATTR (NORMAL);
-	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
+	chtype attrs[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
 
 	char *title;
 	if ((title = compact_map_find (map, "title"))
 	 || (title = compact_map_find (map, "name"))
 	 || (title = compact_map_find (map, "file")))
 	{
-		struct row_buffer buf = row_buffer_make ();
-		row_buffer_append (&buf, title, attr_highlight);
-		app_flush_header (&buf, attr_normal);
+		struct layout l = {};
+		app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+		app_push (&l, g.ui->label (attrs[1], title));
+		app_push_fill (&l, g.ui->padding (attrs[0], 0, 1));
+		app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+		app_flush_layout (&l);
 	}
 
 	char *artist = compact_map_find (map, "artist");
@@ -1694,14 +1801,23 @@ app_draw_song_info (void)
 	if (!artist && !album)
 		return;
 
-	struct row_buffer buf = row_buffer_make ();
+	struct layout l = {};
+	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+
 	if (artist)
-		row_buffer_append_args (&buf, " by "   + !buf.total_width, attr_normal,
-			artist, attr_highlight, NULL);
+	{
+		app_push (&l, g.ui->label (attrs[0], "by "));
+		app_push (&l, g.ui->label (attrs[1], artist));
+	}
 	if (album)
-		row_buffer_append_args (&buf, " from " + !buf.total_width, attr_normal,
-			album,  attr_highlight, NULL);
-	app_flush_header (&buf, attr_normal);
+	{
+		app_push (&l, g.ui->label (attrs[0], " from " + !artist));
+		app_push (&l, g.ui->label (attrs[1], album));
+	}
+
+	app_push_fill (&l, g.ui->padding (attrs[0], 0, 1));
+	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+	app_flush_layout (&l);
 }
 
 static char *
@@ -1721,196 +1837,169 @@ app_time_string (int seconds)
 }
 
 static void
-app_write_time (struct row_buffer *buf, int seconds, chtype attrs)
+app_layout_status (void)
 {
-	char *s = app_time_string (seconds);
-	row_buffer_append (buf, s, attrs);
-	free (s);
-}
-
-static void
-app_write_gauge (struct row_buffer *buf, float ratio, int width)
-{
-	if (ratio < 0) ratio = 0;
-	if (ratio > 1) ratio = 1;
-
-	// Always compute it in exactly eight times the resolution,
-	// because sometimes Unicode is even useful
-	int len_left = ratio * width * 8 + 0.5;
-
-	static const char *partials[] = { " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉" };
-	int remainder = len_left % 8;
-	len_left /= 8;
-
-	const char *partial = NULL;
-	if (g.use_partial_boxes)
-		partial = partials[remainder];
-	else
-		len_left += remainder >= (int) 4;
-
-	int len_right = width - len_left;
-	row_buffer_space (buf, len_left, APP_ATTR (ELAPSED));
-	if (partial && len_right-- > 0)
-		row_buffer_append (buf, partial, APP_ATTR (REMAINS));
-	row_buffer_space (buf, len_right, APP_ATTR (REMAINS));
-}
-
-static void
-app_draw_status (void)
-{
-	if (g.state != PLAYER_STOPPED)
-		app_draw_song_info ();
-
-	chtype attr_normal    = APP_ATTR (NORMAL);
-	chtype attr_highlight = APP_ATTR (HIGHLIGHT);
-
-	struct row_buffer buf = row_buffer_make ();
 	bool stopped = g.state == PLAYER_STOPPED;
-	chtype attr_song_action = stopped ? attr_normal : attr_highlight;
+	if (!stopped)
+		app_layout_song_info ();
 
+	chtype attrs[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
+	struct layout l = {};
+
+	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+	app_push (&l, g.ui->button (attrs[!stopped], "<<", ACTION_MPD_PREVIOUS));
+	app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
 	const char *toggle = g.state == PLAYER_PLAYING ? "||" : "|>";
-	row_buffer_append_args (&buf,
-		"<<",   attr_song_action, " ",  attr_normal,
-		toggle, attr_highlight,   " ",  attr_normal,
-		"[]",   attr_song_action, " ",  attr_normal,
-		">>",   attr_song_action, "  ", attr_normal,
-		NULL);
+	app_push (&l, g.ui->button (attrs[1], toggle, ACTION_MPD_TOGGLE));
+	app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
+	app_push (&l, g.ui->button (attrs[!stopped], "[]", ACTION_MPD_STOP));
+	app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
+	app_push (&l, g.ui->button (attrs[!stopped], ">>", ACTION_MPD_NEXT));
+	app_push (&l, g.ui->padding (attrs[0], 1, 1));
 
 	if (stopped)
-		row_buffer_append (&buf, "Stopped", attr_normal);
+		app_push_fill (&l, g.ui->label (attrs[0], "Stopped"));
 	else
 	{
 		if (g.song_elapsed >= 0)
 		{
-			app_write_time (&buf, g.song_elapsed, attr_normal);
-			row_buffer_append (&buf, " ", attr_normal);
+			char *s = app_time_string (g.song_elapsed);
+			app_push (&l, g.ui->label (attrs[0], s));
+			free (s);
 		}
 		if (g.song_duration >= 1)
 		{
-			row_buffer_append (&buf, "/ ", attr_normal);
-			app_write_time (&buf, g.song_duration, attr_normal);
-			row_buffer_append (&buf, " ", attr_normal);
+			char *s = app_time_string (g.song_duration);
+			app_push (&l, g.ui->label (attrs[0], " / "));
+			app_push (&l, g.ui->label (attrs[0], s));
+			free (s);
 		}
-		row_buffer_append (&buf, " ", attr_normal);
+
+		app_push (&l, g.ui->padding (attrs[0], 1, 1));
 	}
 
-	// It gets a bit complicated due to the only right-aligned item on the row
 	struct str volume = str_make ();
 #ifdef WITH_PULSE
 	if (g.pulse_control_requested)
 	{
-		struct str buf = str_make ();
-		if (pulse_volume_status (&g.pulse, &buf))
+		if (pulse_volume_status (&g.pulse, &volume))
 		{
 			if (g.volume >= 0 && g.volume != 100)
-				str_append_printf (&buf, " (%d%%)", g.volume);
+				str_append_printf (&volume, " (%d%%)", g.volume);
 		}
 		else
 		{
 			if (g.volume >= 0)
-				str_append_printf (&buf, "(%d%%)", g.volume);
+				str_append_printf (&volume, "(%d%%)", g.volume);
 		}
-		if (buf.len)
-			str_append_printf (&volume, "  %s", buf.str);
-
-		str_free (&buf);
 	}
 	else
 #endif  // WITH_PULSE
 	if (g.volume >= 0)
-		str_append_printf (&volume, "  %3d%%", g.volume);
+		str_append_printf (&volume, "%3d%%", g.volume);
 
-	int remaining = COLS - buf.total_width - volume.len;
-	if (!stopped && g.song_elapsed >= 0 && g.song_duration >= 1
-	 && remaining > 0)
-	{
-		g.gauge_offset = buf.total_width;
-		g.gauge_width = remaining;
-		app_write_gauge (&buf,
-			(float) g.song_elapsed / g.song_duration, remaining);
-	}
+	if (!stopped && g.song_elapsed >= 0 && g.song_duration >= 1)
+		app_push (&l, g.ui->gauge (attrs[0]))
+			->id = WIDGET_GAUGE;
 	else
-		row_buffer_space (&buf, remaining, attr_normal);
+		app_push_fill (&l, g.ui->padding (attrs[0], 0, 1));
 
 	if (volume.len)
-		row_buffer_append (&buf, volume.str, attr_normal);
+	{
+		app_push (&l, g.ui->padding (attrs[0], 1, 1));
+		app_push (&l, g.ui->label (attrs[0], volume.str));
+	}
 	str_free (&volume);
 
-	g.controls_offset = g.header_height;
-	app_flush_header (&buf, attr_normal);
+	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+	app_flush_layout (&l);
 }
 
 static void
-app_draw_header (void)
+app_layout_tabs (void)
 {
-	g.header_height = 0;
-
-	g.tabs_offset = -1;
-	g.controls_offset = -1;
-	g.gauge_offset = -1;
-	g.gauge_width = 0;
-
-	switch (g.client.state)
-	{
-	case MPD_CONNECTED:
-		app_draw_status ();
-		break;
-	case MPD_CONNECTING:
-		move (g.header_height++, 0);
-		app_write_line ("Connecting to MPD...", APP_ATTR (NORMAL));
-		break;
-	case MPD_DISCONNECTED:
-		move (g.header_height++, 0);
-		app_write_line ("Disconnected", APP_ATTR (NORMAL));
-	}
-
 	chtype attrs[2] = { APP_ATTR (TAB_BAR), APP_ATTR (TAB_ACTIVE) };
+	struct layout l = {};
 
 	// The help tab is disguised so that it's not too intruding
-	struct row_buffer buf = row_buffer_make ();
-	row_buffer_append (&buf, APP_TITLE, attrs[g.active_tab == g.help_tab]);
-	row_buffer_append (&buf, " ", attrs[false]);
+	app_push (&l, g.ui->padding (attrs[g.active_tab == g.help_tab], 0.25, 1))
+		->id = WIDGET_TAB;
+	app_push (&l, g.ui->label (attrs[g.active_tab == g.help_tab], APP_TITLE))
+		->id = WIDGET_TAB;
 
-	g.tabs_offset = g.header_height;
+	// XXX: attrs[0]?
+	app_push (&l, g.ui->padding (attrs[g.active_tab == g.help_tab], 0.5, 1))
+		->id = WIDGET_TAB;
+
+	int i = 0;
 	LIST_FOR_EACH (struct tab, iter, g.tabs)
-		row_buffer_append (&buf, iter->name, attrs[iter == g.active_tab]);
+	{
+		struct widget *w = app_push (&l,
+			g.ui->label (attrs[iter == g.active_tab], iter->name));
+		w->id = WIDGET_TAB;
+		w->subid = ++i;
+	}
+
+	app_push_fill (&l, g.ui->padding (attrs[0], 1, 1));
 
 #ifdef WITH_FFTW
 	// This seems like the most reasonable, otherwise unoccupied space
 	if (g.spectrum_fd != -1)
 	{
-		// Find some space and remember where it was, for fast refreshes
-		row_buffer_ellipsis (&buf, COLS - g.spectrum.bars - 1);
-		row_buffer_align (&buf, COLS - g.spectrum.bars, attrs[false]);
-		g.spectrum_row = g.header_height;
-		g.spectrum_column = buf.total_width;
-
-		row_buffer_append (&buf, g.spectrum.spectrum, attrs[false]);
+		app_push (&l, g.ui->spectrum (attrs[0], g.spectrum.bars))
+			->id = WIDGET_SPECTRUM;
 	}
 #endif  // WITH_FFTW
 
-	app_flush_header (&buf, attrs[false]);
+	app_flush_layout (&l);
+}
+
+static void
+app_layout_header (void)
+{
+	{
+		struct layout l = {};
+		app_push_fill (&l, g.ui->padding (APP_ATTR (NORMAL), 0, 0.125));
+		app_flush_layout (&l);
+	}
+
+	switch (g.client.state)
+	{
+	case MPD_CONNECTED:
+		app_layout_status ();
+		break;
+	case MPD_CONNECTING:
+		app_layout_text ("Connecting to MPD...", APP_ATTR (NORMAL));
+		break;
+	case MPD_DISCONNECTED:
+		app_layout_text ("Disconnected", APP_ATTR (NORMAL));
+	}
+
+	{
+		struct layout l = {};
+		app_push_fill (&l, g.ui->padding (APP_ATTR (NORMAL), 0, 0.125));
+		app_flush_layout (&l);
+	}
+
+	app_layout_tabs ();
 
 	const char *header = g.active_tab->header;
 	if (header)
-	{
-		buf = row_buffer_make ();
-		row_buffer_append (&buf, header, APP_ATTR (HEADER));
-		app_flush_header (&buf, APP_ATTR (HEADER));
-	}
-}
-
-static int
-app_fitting_items (void)
-{
-	// The raw number of items that would have fit on the terminal
-	return LINES - g.header_height - 1 /* status bar */;
+		app_layout_text (header, APP_ATTR (HEADER));
 }
 
 static int
 app_visible_items (void)
 {
-	return MAX (0, app_fitting_items ());
+	struct widget *list = NULL;
+	LIST_FOR_EACH (struct widget, w, g.widgets.head)
+		if (w->id == WIDGET_LIST)
+			list = w;
+
+	hard_assert (list != NULL);
+
+	// The raw number of items that would have fit on the terminal
+	return MAX (0, list->height / g.ui_vunit);
 }
 
 /// Figure out scrollbar appearance.  @a s is the minimal slider length as well
@@ -1941,116 +2030,67 @@ app_compute_scrollbar (struct tab *tab, long visible, long s)
 	return (struct scrollbar) { length, offset };
 }
 
-static void
-app_draw_scrollbar (void)
+static struct widget *
+app_layout_row (struct tab *tab, int item_index)
 {
-	// This assumes that we can write to the one-before-last column,
-	// i.e. that it's not covered by any double-wide character (and that
-	// ncurses comes to the right results when counting characters).
-	//
-	// We could also precompute the scrollbar and append it to each row
-	// as we render them, plus all the unoccupied rows.
-	struct tab *tab = g.active_tab;
-	int visible_items = app_visible_items ();
+	int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
 
-	hard_assert (tab->item_count != 0);
-	if (!g.use_partial_boxes)
+	bool override_colors = true;
+	if (item_index == tab->item_selected)
+		row_attrs = g.ui_focused
+			? APP_ATTR (SELECTION) : APP_ATTR (DEFOCUSED);
+	else if (tab->item_mark > -1 &&
+	   ((item_index >= tab->item_mark && item_index <= tab->item_selected)
+	 || (item_index >= tab->item_selected && item_index <= tab->item_mark)))
+		row_attrs = g.ui_focused
+			? APP_ATTR (MULTISELECT) : APP_ATTR (DEFOCUSED);
+	else
+		override_colors = false;
+
+	// The padding must be added before the recoloring below.
+	struct layout l = tab->on_item_layout (item_index);
+	struct widget *w = g.ui->padding (0, 0.25, 1);
+	LIST_PREPEND (l.head, w);
+	app_push (&l, g.ui->padding (0, 0.25, 1));
+
+	// Combine attributes used by the handler with the defaults.
+	LIST_FOR_EACH (struct widget, w, l.head)
 	{
-		struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 1);
-		for (int row = 0; row < visible_items; row++)
-		{
-			move (g.header_height + row, COLS - 1);
-			if (row < bar.start || row >= bar.start + bar.length)
-				addch (' ' | APP_ATTR (SCROLLBAR));
-			else
-				addch (' ' | APP_ATTR (SCROLLBAR) | A_REVERSE);
-		}
-		return;
-	}
-
-	struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 8);
-	bar.length += bar.start;
-
-	int start_part = bar.start  % 8; bar.start  /= 8;
-	int end_part   = bar.length % 8; bar.length /= 8;
-
-	// Even with this, the solid part must be at least one character high
-	static const char *partials[] = { "█", "▇", "▆", "▅", "▄", "▃", "▂", "▁" };
-
-	for (int row = 0; row < visible_items; row++)
-	{
-		chtype attrs = APP_ATTR (SCROLLBAR);
-		if (row > bar.start && row <= bar.length)
-			attrs ^= A_REVERSE;
-
-		const char *c = " ";
-		if (row == bar.start)  c = partials[start_part];
-		if (row == bar.length) c = partials[end_part];
-
-		move (g.header_height + row, COLS - 1);
-
-		struct row_buffer buf = row_buffer_make ();
-		row_buffer_append (&buf, c, attrs);
-		row_buffer_flush (&buf);
-		row_buffer_free (&buf);
-	}
-}
-
-static void
-app_draw_view (void)
-{
-	move (g.header_height, 0);
-	clrtobot ();
-
-	struct tab *tab = g.active_tab;
-	bool want_scrollbar = (int) tab->item_count > app_visible_items ();
-	int view_width = COLS - want_scrollbar;
-
-	int to_show =
-		MIN (app_fitting_items (), (int) tab->item_count - tab->item_top);
-	for (int row = 0; row < to_show; row++)
-	{
-		int item_index = tab->item_top + row;
-		int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
-
-		bool override_colors = true;
-		if (item_index == tab->item_selected)
-			row_attrs = g.focused
-				? APP_ATTR (SELECTION) : APP_ATTR (DEFOCUSED);
-		else if (tab->item_mark > -1 &&
-		   ((item_index >= tab->item_mark && item_index <= tab->item_selected)
-		 || (item_index >= tab->item_selected && item_index <= tab->item_mark)))
-			row_attrs = g.focused
-				? APP_ATTR (MULTISELECT) : APP_ATTR (DEFOCUSED);
+		chtype *attrs = &w->attrs;
+		if (override_colors)
+			*attrs = (*attrs & ~(A_COLOR | A_REVERSE)) | row_attrs;
+		else if ((*attrs & A_COLOR) && (row_attrs & A_COLOR))
+			*attrs |= (row_attrs & ~A_COLOR);
 		else
-			override_colors = false;
-
-		struct row_buffer buf = row_buffer_make ();
-		tab->on_item_draw (item_index, &buf, view_width);
-
-		// Combine attributes used by the handler with the defaults.
-		// Avoiding attrset() because of row_buffer_flush().
-		for (size_t i = 0; i < buf.chars_len; i++)
-		{
-			chtype *attrs = &buf.chars[i].attrs;
-			if (override_colors)
-				*attrs = (*attrs & ~(A_COLOR | A_REVERSE)) | row_attrs;
-			else if ((*attrs & A_COLOR) && (row_attrs & A_COLOR))
-				*attrs |= (row_attrs & ~A_COLOR);
-			else
-				*attrs |=  row_attrs;
-		}
-
-		move (g.header_height + row, 0);
-		app_flush_buffer (&buf, view_width, row_attrs);
+			*attrs |=  row_attrs;
 	}
-
-	if (want_scrollbar)
-		app_draw_scrollbar ();
+	return l.head;
 }
 
 static void
-app_write_mpd_status_playlist (struct row_buffer *buf)
+app_layout_view (void)
+{
+	// XXX: Expecting the status bar to always be there, one row tall.
+	struct widget *last = g.widgets.tail;
+	int unavailable_height = last->y + last->height + g.ui_vunit;
+
+	struct layout l = {};
+	struct widget *w = app_push_fill (&l, g.ui->list ());
+	w->id = WIDGET_LIST;
+	w->height = g.ui_height - unavailable_height;
+
+	struct tab *tab = g.active_tab;
+	if ((int) tab->item_count * g.ui_vunit > w->height)
+	{
+		app_push (&l, g.ui->scrollbar (APP_ATTR (SCROLLBAR)))
+			->id = WIDGET_SCROLLBAR;
+	}
+
+	app_flush_layout (&l);
+}
+
+static char *
+app_mpd_status_playlist (void)
 {
 	struct str stats = str_make ();
 	if (g.playlist.len == 1)
@@ -2074,28 +2114,35 @@ app_write_mpd_status_playlist (struct row_buffer *buf)
 		else if (minutes)
 			str_append_printf (&stats, " %d minutes", minutes);
 	}
-	row_buffer_append (buf, stats.str, APP_ATTR (NORMAL));
-	str_free (&stats);
+	return str_steal (&stats);
 }
 
 static void
-app_write_mpd_status (struct row_buffer *buf)
+app_layout_mpd_status (void)
 {
+	struct layout l = {};
+	chtype attrs[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
+	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+
 	struct str_map *map = &g.playback_info;
 	if (g.active_tab->item_mark > -1)
 	{
 		struct tab_range r = tab_selection_range (g.active_tab);
 		char *msg = xstrdup_printf (r.from == r.upto
 			? "Selected %d item" : "Selected %d items", r.upto - r.from + 1);
-		row_buffer_append (buf, msg, APP_ATTR (HIGHLIGHT));
+		app_push_fill (&l, g.ui->label (attrs[0], msg));
 		free (msg);
 	}
 	else if (g.poller_curl.registered)
-		row_buffer_append (buf, "Downloading...", APP_ATTR (NORMAL));
+		app_push_fill (&l, g.ui->label (attrs[0], "Downloading..."));
 	else if (str_map_find (map, "updating_db"))
-		row_buffer_append (buf, "Updating database...", APP_ATTR (NORMAL));
+		app_push_fill (&l, g.ui->label (attrs[0], "Updating database..."));
 	else
-		app_write_mpd_status_playlist (buf);
+	{
+		char *status = app_mpd_status_playlist ();
+		app_push_fill (&l, g.ui->label (attrs[0], status));
+		free (status);
+	}
 
 	const char *s;
 	bool repeat  = (s = str_map_find (map, "repeat"))  && strcmp (s, "0");
@@ -2103,46 +2150,51 @@ app_write_mpd_status (struct row_buffer *buf)
 	bool single  = (s = str_map_find (map, "single"))  && strcmp (s, "0");
 	bool consume = (s = str_map_find (map, "consume")) && strcmp (s, "0");
 
-	struct row_buffer right = row_buffer_make ();
-	chtype a[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
-	if (repeat)  row_buffer_append_args (&right,
-		" ", APP_ATTR (NORMAL), "repeat",  a[repeat],  NULL);
-	if (random)  row_buffer_append_args (&right,
-		" ", APP_ATTR (NORMAL), "random",  a[random],  NULL);
-	if (single)  row_buffer_append_args (&right,
-		" ", APP_ATTR (NORMAL), "single",  a[single],  NULL);
-	if (consume) row_buffer_append_args (&right,
-		" ", APP_ATTR (NORMAL), "consume", a[consume], NULL);
+	if (g.ui->have_icons || repeat)
+	{
+		app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
+		app_push (&l,
+			g.ui->button (attrs[repeat], "repeat", ACTION_MPD_REPEAT));
+	}
+	if (g.ui->have_icons || random)
+	{
+		app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
+		app_push (&l,
+			g.ui->button (attrs[random], "random", ACTION_MPD_RANDOM));
+	}
+	if (g.ui->have_icons || single)
+	{
+		app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
+		app_push (&l,
+			g.ui->button (attrs[single], "single", ACTION_MPD_SINGLE));
+	}
+	if (g.ui->have_icons || consume)
+	{
+		app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
+		app_push (&l,
+			g.ui->button (attrs[consume], "consume", ACTION_MPD_CONSUME));
+	}
 
-	row_buffer_space (buf,
-		MAX (0, COLS - buf->total_width - right.total_width),
-		APP_ATTR (NORMAL));
-	row_buffer_append_buffer (buf, &right);
-	row_buffer_free (&right);
+	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+	app_flush_layout (&l);
 }
 
 static void
-app_draw_statusbar (void)
+app_layout_statusbar (void)
 {
-	int caret = -1;
 
-	struct row_buffer buf = row_buffer_make ();
 	if (g.message)
-		row_buffer_append (&buf, g.message, APP_ATTR (HIGHLIGHT));
+		app_layout_text (g.message, APP_ATTR (HIGHLIGHT));
 	else if (g.editor.line)
-		caret = line_editor_write (&g.editor, &buf, COLS, APP_ATTR (HIGHLIGHT));
-	else if (g.client.state == MPD_CONNECTED)
-		app_write_mpd_status (&buf);
-
-	move (LINES - 1, 0);
-	app_flush_buffer (&buf, COLS, APP_ATTR (NORMAL));
-
-	curs_set (0);
-	if (caret != -1)
 	{
-		move (LINES - 1, caret);
-		curs_set (1);
+		struct layout l = {};
+		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1));
+		app_push (&l, g.ui->editor (APP_ATTR (HIGHLIGHT)));
+		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1));
+		app_flush_layout (&l);
 	}
+	else if (g.client.state == MPD_CONNECTED)
+		app_layout_mpd_status ();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2172,17 +2224,35 @@ app_fix_view_range (void)
 }
 
 static void
+app_on_flip (void *user_data)
+{
+	(void) user_data;
+	poller_idle_reset (&g.flip_event);
+
+	// Waste of time, and may cause X11 to render uninitialised pixmaps.
+	if (g.polling && !g.refresh_event.active)
+		g.ui->flip ();
+}
+
+static void
 app_on_refresh (void *user_data)
 {
 	(void) user_data;
 	poller_idle_reset (&g.refresh_event);
 
-	app_draw_header ();
-	app_fix_view_range();
-	app_draw_view ();
-	app_draw_statusbar ();
+	LIST_FOR_EACH (struct widget, w, g.widgets.head)
+		free (w);
 
-	refresh ();
+	g.widgets = (struct layout) {};
+
+	app_layout_header ();
+	app_layout_view ();
+	app_layout_statusbar ();
+
+	app_fix_view_range();
+
+	g.ui->render ();
+	poller_idle_set (&g.flip_event);
 }
 
 // --- Actions -----------------------------------------------------------------
@@ -2277,8 +2347,6 @@ app_goto_tab (int tab_index)
 
 // --- Actions -----------------------------------------------------------------
 
-#include "nncmpp-actions.h"
-
 static int
 action_resolve (const char *name)
 {
@@ -2362,15 +2430,15 @@ app_on_mpd_command_editor_end (bool confirmed)
 
 static size_t
 incremental_search_match (const ucs4_t *needle, size_t len,
-	const struct row_buffer *row)
+	const ucs4_t *chars, size_t chars_len)
 {
 	// XXX: this is slow and simplistic, but unistring is awkward to use
 	size_t best = 0;
-	for (size_t start = 0; start < row->chars_len; start++)
+	for (size_t start = 0; start < chars_len; start++)
 	{
 		size_t i = 0;
-		for (; i < len && start + i < row->chars_len; i++)
-			if (uc_tolower (needle[i]) != uc_tolower (row->chars[start + i].c))
+		for (; i < len && start + i < chars_len; i++)
+			if (uc_tolower (needle[i]) != uc_tolower (chars[start + i]))
 				break;
 		best = MAX (best, i);
 	}
@@ -2387,10 +2455,19 @@ incremental_search_on_changed (void)
 	size_t best = 0, current = 0, index = MAX (tab->item_selected, 0), i = 0;
 	while (i++ < tab->item_count)
 	{
-		struct row_buffer buf = row_buffer_make ();
-		tab->on_item_draw (index, &buf, COLS);
-		current = incremental_search_match (g.editor.line, g.editor.len, &buf);
-		row_buffer_free (&buf);
+		struct str s = str_make ();
+		LIST_FOR_EACH (struct widget, w, tab->on_item_layout (index).head)
+		{
+			str_append (&s, w->text);
+			free (w);
+		}
+
+		size_t len;
+		ucs4_t *text = u8_to_u32 ((const uint8_t *) s.str, s.len, NULL, &len);
+		str_free (&s);
+		current = incremental_search_match
+			(g.editor.line, g.editor.len, text, len);
+		free (text);
 		if (best < current)
 		{
 			best = current;
@@ -2615,92 +2692,103 @@ app_editor_process_action (enum action action)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
-app_process_left_mouse_click (int line, int column, bool double_click)
+app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
 {
-	if (line == g.controls_offset)
+	switch (w->id)
 	{
-		// XXX: there could be a push_widget(buf, text, attrs, handler)
-		//   function to help with this but it might not be worth it
-		enum action action = ACTION_NONE;
-		if (column >= 0 && column <=  1) action = ACTION_MPD_PREVIOUS;
-		if (column >= 3 && column <=  4) action = ACTION_MPD_TOGGLE;
-		if (column >= 6 && column <=  7) action = ACTION_MPD_STOP;
-		if (column >= 9 && column <= 10) action = ACTION_MPD_NEXT;
-
-		if (action)
-			return app_process_action (action);
-
-		int gauge_offset = column - g.gauge_offset;
-		if (g.gauge_offset < 0
-		 || gauge_offset < 0 || gauge_offset >= g.gauge_width)
-			return false;
-
-		float position = (float) gauge_offset / g.gauge_width;
+	case WIDGET_BUTTON:
+		app_process_action (w->subid);
+		break;
+	case WIDGET_GAUGE:
+	{
+		float position = (float) x / w->width;
 		if (g.song_duration >= 1)
 		{
 			char *where = xstrdup_printf ("%f", position * g.song_duration);
 			MPD_SIMPLE ("seekcur", where);
 			free (where);
 		}
+		break;
 	}
-	else if (line == g.tabs_offset)
+	case WIDGET_TAB:
 	{
-		struct tab *winner = NULL;
-		int indent = strlen (APP_TITLE);
-		if (column < indent)
-		{
-			app_switch_tab (g.help_tab);
-			return true;
-		}
-		for (struct tab *iter = g.tabs; !winner && iter; iter = iter->next)
-		{
-			if (column < (indent += iter->name_width))
-				winner = iter;
-		}
-		if (!winner)
-			return false;
+		struct tab *tab = g.help_tab;
+		int i = 0;
+		LIST_FOR_EACH (struct tab, iter, g.tabs)
+			if (++i == w->subid)
+				tab = iter;
 
-		app_switch_tab (winner);
+		app_switch_tab (tab);
+		break;
 	}
-	else if (line >= g.header_height)
+	case WIDGET_LIST:
 	{
 		struct tab *tab = g.active_tab;
-		int row_index = line - g.header_height;
+		int row_index = y / g.ui_vunit;
 		if (row_index < 0
 		 || row_index >= (int) tab->item_count - tab->item_top)
 			return false;
 
-		// TODO: handle the scrollbar a bit better than this
-		int visible_items = app_visible_items ();
-		if ((int) tab->item_count > visible_items && column == COLS - 1)
-			tab->item_top = (float) row_index / visible_items
-				* (int) tab->item_count - visible_items / 2;
-		else
-			tab->item_selected = row_index + tab->item_top;
+		// TODO: Probably will need to fix up item->top
+		//   for partially visible items in X11.
+		tab->item_selected = row_index + tab->item_top;
 		app_invalidate ();
 
 		if (double_click)
 			app_process_action (ACTION_CHOOSE);
+		break;
+	}
+	case WIDGET_SCROLLBAR:
+	{
+		struct tab *tab = g.active_tab;
+		int visible_items = app_visible_items ();
+		tab->item_top = (float) y / w->height
+			* (int) tab->item_count - visible_items / 2;
+		app_invalidate ();
+	}
 	}
 	return true;
 }
 
 static bool
-app_process_mouse (termo_mouse_event_t type, int line, int column, int button,
+app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
 	bool double_click)
 {
+	// XXX: Terminals don't let us know which button has been released,
+	//   so we can't press buttons at that point.  We'd need a special "click"
+	//   event handler that could be handled better under X11.
 	if (type != TERMO_MOUSE_PRESS)
 		return true;
 
 	if (g.editor.line)
+	{
 		line_editor_abort (&g.editor, false);
+		app_invalidate ();
+	}
 
-	if (button == 1)
-		return app_process_left_mouse_click (line, column, double_click);
-	else if (button == 4)
-		return app_process_action (ACTION_SCROLL_UP);
-	else if (button == 5)
-		return app_process_action (ACTION_SCROLL_DOWN);
+	struct widget *target = NULL;
+	LIST_FOR_EACH (struct widget, w, g.widgets.head)
+		if (x >= w->x && x < w->x + w->width
+		 && y >= w->y && y < w->y + w->height)
+			target = w;
+	if (!target)
+		return false;
+
+	x -= target->x;
+	y -= target->y;
+	switch (button)
+	{
+	case 1:
+		return app_process_left_mouse_click (target, x, y, double_click);
+	case 4:
+		if (target->id == WIDGET_LIST)
+			return app_process_action (ACTION_SCROLL_UP);
+		break;
+	case 5:
+		if (target->id == WIDGET_LIST)
+			return app_process_action (ACTION_SCROLL_DOWN);
+		break;
+	}
 	return false;
 }
 
@@ -2892,7 +2980,7 @@ app_process_termo_event (termo_key_t *event)
 	bool handled = false;
 	if ((handled = event->type == TERMO_TYPE_FOCUS))
 	{
-		g.focused = !!event->code.focused;
+		g.ui_focused = !!event->code.focused;
 		app_invalidate ();
 		// Senseless fall-through
 	}
@@ -2930,11 +3018,8 @@ app_process_termo_event (termo_key_t *event)
 
 static struct tab g_current_tab;
 
-#define DURATION_MAX_LEN (1 /*separator */ + 2 /* h */ + 3 /* m */+ 3 /* s */)
-
-static void
-current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
-	int width)
+static struct layout
+current_tab_on_item_layout (size_t item_index)
 {
 	// TODO: configurable output, maybe dynamically sized columns
 	compact_map_t map = item_list_get (&g.playlist, item_index);
@@ -2942,23 +3027,26 @@ current_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	const char *title  = compact_map_find (map, "title");
 
 	chtype attrs = (int) item_index == g.song ? A_BOLD : 0;
+	struct layout l = {};
 	if (artist && title)
-		row_buffer_append_args (buffer,
-			artist, attrs, " - ", attrs, title, attrs, NULL);
+	{
+		char *joined = xstrdup_printf ("%s - %s", artist, title);
+		app_push_fill (&l, g.ui->label (attrs, joined));
+		free (joined);
+	}
 	else
-		row_buffer_append (buffer, compact_map_find (map, "file"), attrs);
-
-	row_buffer_align (buffer, width - DURATION_MAX_LEN, attrs);
+		app_push_fill (&l, g.ui->label (attrs, compact_map_find (map, "file")));
 
 	int duration = -1;
 	mpd_read_time (compact_map_find (map, "duration"), &duration, NULL);
 	mpd_read_time (compact_map_find (map, "time"),     &duration, NULL);
 
 	char *s = duration < 0 ? xstrdup ("-") : app_time_string (duration);
-	char *right_aligned = xstrdup_printf ("%*s", DURATION_MAX_LEN, s);
-	row_buffer_append (buffer, right_aligned, attrs);
-	free (right_aligned);
+	app_push (&l, g.ui->padding (attrs, 1, 1));
+	app_push (&l, g.ui->label (attrs, s));
 	free (s);
+
+	return l;
 }
 
 static void
@@ -3073,7 +3161,7 @@ current_tab_init (void)
 	tab_init (super, "Current");
 	super->can_multiselect = true;
 	super->on_action = current_tab_on_action;
-	super->on_item_draw = current_tab_on_item_draw;
+	super->on_item_layout = current_tab_on_item_layout;
 	return super;
 }
 
@@ -3139,11 +3227,9 @@ library_tab_add (int type, int duration, const char *name, const char *path)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-static void
-library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
-	int width)
+static struct layout
+library_tab_on_item_layout (size_t item_index)
 {
-	(void) width;
 	hard_assert (item_index < g_library_tab.items_len);
 
 	struct library_tab_item *x = &g_library_tab.items[item_index];
@@ -3156,15 +3242,21 @@ library_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
 	case LIBRARY_FILE: prefix = " "; name = x->name; break;
 	default:           hard_assert (!"invalid item type");
 	}
-	chtype attrs = x->type != LIBRARY_FILE ? APP_ATTR (DIRECTORY) : 0;
-	row_buffer_append_args (buffer, prefix, attrs, name, attrs, NULL);
-	if (x->duration < 0)
-		return;
 
-	char *s = app_time_string (x->duration);
-	row_buffer_align (buffer, width - 2 /* gap */ - strlen (s), 0);
-	row_buffer_append_args (buffer, "  " /* gap */, 0, s, 0, NULL);
-	free (s);
+	chtype attrs = x->type != LIBRARY_FILE ? APP_ATTR (DIRECTORY) : 0;
+	struct layout l = {};
+
+	app_push (&l, g.ui->label (attrs, prefix));
+	app_push_fill (&l, g.ui->label (attrs, name));
+
+	if (x->duration >= 0)
+	{
+		char *s = app_time_string (x->duration);
+		app_push (&l, g.ui->padding (0, 1, 1));
+		app_push (&l, g.ui->label (attrs, s));
+		free (s);
+	}
+	return l;
 }
 
 static char
@@ -3533,7 +3625,7 @@ library_tab_init (void)
 	tab_init (super, "Library");
 	super->can_multiselect = true;
 	super->on_action = library_tab_on_action;
-	super->on_item_draw = library_tab_on_item_draw;
+	super->on_item_layout = library_tab_on_item_layout;
 	return super;
 }
 
@@ -3792,12 +3884,12 @@ streams_tab_on_action (enum action action)
 	return true;
 }
 
-static void
-streams_tab_on_item_draw (size_t item_index, struct row_buffer *buffer,
-	int width)
+static struct layout
+streams_tab_on_item_layout (size_t item_index)
 {
-	(void) width;
-	row_buffer_append (buffer, g.streams.vector[item_index], 0);
+	struct layout l = {};
+	app_push_fill (&l, g.ui->label (0, g.streams.vector[item_index]));
+	return l;
 }
 
 static struct tab *
@@ -3806,7 +3898,7 @@ streams_tab_init (void)
 	static struct tab super;
 	tab_init (&super, "Streams");
 	super.on_action = streams_tab_on_action;
-	super.on_item_draw = streams_tab_on_item_draw;
+	super.on_item_layout = streams_tab_on_item_layout;
 	super.item_count = g.streams.len;
 	return &super;
 }
@@ -3821,23 +3913,19 @@ static struct
 }
 g_info_tab;
 
-static void
-info_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
+static struct layout
+info_tab_on_item_layout (size_t item_index)
 {
-	(void) width;
+	const char *key = g_info_tab.keys.vector[item_index];
+	const char *value = g_info_tab.values.vector[item_index];
+	struct layout l = {};
 
-	// It looks like we could do with a generic list structure that just
-	// stores formatted row_buffers.  Let's see for other tabs:
-	//  - Current -- unusable, has dynamic column alignment
-	//  - Library -- could work for the "icons"
-	//  - Streams -- useless
-	//  - Debug   -- it'd take up considerably more space
-	// However so far we're only showing show key-value pairs.
-
-	row_buffer_append_args (buffer,
-		g_info_tab.keys.vector[item_index], A_BOLD, ":", A_BOLD, NULL);
-	row_buffer_space (buffer, 8 - buffer->total_width, 0);
-	row_buffer_append (buffer, g_info_tab.values.vector[item_index], 0);
+	char *prefix = xstrdup_printf ("%s:", key);
+	app_push (&l, g.ui->label (A_BOLD, prefix))
+		->width = 8 * g.ui_hunit;
+	app_push (&l, g.ui->padding (0, 0.5, 1));
+	app_push_fill (&l, g.ui->label (0, value));
+	return l;
 }
 
 static void
@@ -3879,7 +3967,7 @@ info_tab_init (void)
 
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
-	super->on_item_draw = info_tab_on_item_draw;
+	super->on_item_layout = info_tab_on_item_layout;
 	return super;
 }
 
@@ -3949,7 +4037,7 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out,
 		{
 			char *joined = strv_join (&ass, ", ");
 			strv_append_owned (out, xstrdup_printf
-				("  %-30s %s", g_action_descriptions[i], joined));
+				("  %s%c%s", g_action_descriptions[i], 0, joined));
 			free (joined);
 
 			bound[i] = true;
@@ -3966,19 +4054,27 @@ help_tab_unbound (struct strv *out, bool bound[ACTION_COUNT])
 		if (!bound[i])
 		{
 			strv_append_owned (out,
-				xstrdup_printf ("  %-30s", g_action_descriptions[i]));
+				xstrdup_printf ("  %s%c", g_action_descriptions[i], 0));
 			help_tab_assign_action (i);
 		}
 }
 
-static void
-help_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
+static struct layout
+help_tab_on_item_layout (size_t item_index)
 {
-	(void) width;
-
 	hard_assert (item_index < g_help_tab.lines.len);
 	const char *line = g_help_tab.lines.vector[item_index];
-	row_buffer_append (buffer, line, *line == ' ' ? 0 : A_BOLD);
+
+	struct layout l = {};
+	app_push_fill (&l, g.ui->label (*line == ' ' ? 0 : A_BOLD, line));
+
+	const char *definition = strchr (line, 0) + 1;
+	if (*line == ' ' && *definition)
+	{
+		app_push (&l, g.ui->padding (0, 0.5, 1));
+		app_push_fill (&l, g.ui->label (0, definition));
+	}
+	return l;
 }
 
 static struct tab *
@@ -4013,7 +4109,7 @@ help_tab_init (void)
 	struct tab *super = &g_help_tab.super;
 	tab_init (super, "Help");
 	super->on_action = help_tab_on_action;
-	super->on_item_draw = help_tab_on_item_draw;
+	super->on_item_layout = help_tab_on_item_layout;
 	super->item_count = lines->len;
 	return super;
 }
@@ -4035,8 +4131,8 @@ static struct
 }
 g_debug_tab;
 
-static void
-debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
+static struct layout
+debug_tab_on_item_layout (size_t item_index)
 {
 	hard_assert (item_index < g_debug_tab.items_len);
 	struct debug_item *item = &g_debug_tab.items[item_index];
@@ -4048,14 +4144,13 @@ debug_tab_on_item_draw (size_t item_index, struct row_buffer *buffer, int width)
 
 	char *prefix = xstrdup_printf
 		("%s.%03d", buf, (int) (item->timestamp % 1000));
-	row_buffer_append (buffer, prefix, 0);
+
+	struct layout l = {};
+	app_push (&l, g.ui->label (0, prefix));
+	app_push (&l, g.ui->padding (item->attrs, 0.5, 1));
+	app_push_fill (&l, g.ui->label (item->attrs, item->text));
 	free (prefix);
-
-	row_buffer_append (buffer, " ", item->attrs);
-	row_buffer_append (buffer, item->text, item->attrs);
-
-	// We override the formatting including colors -- do it for the whole line
-	row_buffer_align (buffer, width, item->attrs);
+	return l;
 }
 
 static void
@@ -4079,7 +4174,7 @@ debug_tab_init (void)
 
 	struct tab *super = &g_debug_tab.super;
 	tab_init (super, "Debug");
-	super->on_item_draw = debug_tab_on_item_draw;
+	super->on_item_layout = debug_tab_on_item_layout;
 	return super;
 }
 
@@ -4092,21 +4187,14 @@ spectrum_redraw (void)
 {
 	// A full refresh would be too computationally expensive,
 	// let's hack around it in this case
-	if (g.spectrum_row != -1)
-	{
-		// Don't mess up the line editor caret, when it's shown
-		int last_x, last_y;
-		getyx (stdscr, last_y, last_x);
+	struct widget *spectrum = NULL;
+	LIST_FOR_EACH (struct widget, w, g.widgets.head)
+		if (w->id == WIDGET_SPECTRUM)
+			spectrum = w;
+	if (spectrum)
+		spectrum->on_render (spectrum);
 
-		attrset (APP_ATTR (TAB_BAR));
-		mvaddstr (g.spectrum_row, g.spectrum_column, g.spectrum.spectrum);
-		attrset (0);
-
-		move (last_y, last_x);
-		refresh ();
-	}
-	else
-		app_invalidate ();
+	poller_idle_set (&g.flip_event);
 }
 
 // When any problem occurs with the FIFO, we'll just give up on it completely
@@ -4120,7 +4208,6 @@ spectrum_discard_fifo (void)
 		g.spectrum_fd = -1;
 
 		spectrum_free (&g.spectrum);
-		g.spectrum_row = g.spectrum_column = -1;
 		app_invalidate ();
 	}
 }
@@ -4746,6 +4833,1338 @@ app_on_reconnect (void *user_data)
 	free (address);
 }
 
+// --- TUI ---------------------------------------------------------------------
+
+static void
+tui_flush_buffer (struct widget *self, struct row_buffer *buf)
+{
+	move (self->y, self->x);
+
+	int space = MIN (self->width, g.ui_width - self->x);
+	row_buffer_align (buf, space, self->attrs);
+	row_buffer_flush (buf);
+	row_buffer_free (buf);
+}
+
+static void
+tui_render_padding (struct widget *self)
+{
+	struct row_buffer buf = row_buffer_make ();
+	tui_flush_buffer (self, &buf);
+}
+
+static struct widget *
+tui_make_padding (chtype attrs, float width, float height)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 2);
+	w->text[0] = ' ';
+	w->on_render = tui_render_padding;
+	w->attrs = attrs;
+	w->width = width * 2;
+	w->height = height;
+	return w;
+}
+
+static void
+tui_render_label (struct widget *self)
+{
+	struct row_buffer buf = row_buffer_make ();
+	row_buffer_append (&buf, self->text, self->attrs);
+	tui_flush_buffer (self, &buf);
+}
+
+static struct widget *
+tui_make_label (chtype attrs, const char *label)
+{
+	size_t len = strlen (label);
+	struct widget *w = xcalloc (1, sizeof *w + len + 1);
+	w->on_render = tui_render_label;
+	w->attrs = attrs;
+	memcpy (w + 1, label, len);
+
+	struct row_buffer buf = row_buffer_make ();
+	row_buffer_append (&buf, w->text, w->attrs);
+	w->width = buf.total_width;
+	w->height = 1;
+	row_buffer_free (&buf);
+	return w;
+}
+
+static struct widget *
+tui_make_button (chtype attrs, const char *label, enum action a)
+{
+	struct widget *w = tui_make_label (attrs, label);
+	w->id = WIDGET_BUTTON;
+	w->subid = a;
+	return w;
+}
+
+static void
+tui_render_gauge (struct widget *self)
+{
+	struct row_buffer buf = row_buffer_make ();
+	if (g.state == PLAYER_STOPPED || g.song_elapsed < 0 || g.song_duration < 1)
+		goto out;
+
+	float ratio = (float) g.song_elapsed / g.song_duration;
+	if (ratio < 0) ratio = 0;
+	if (ratio > 1) ratio = 1;
+
+	// Always compute it in exactly eight times the resolution,
+	// because sometimes Unicode is even useful
+	int len_left = ratio * self->width * 8 + 0.5;
+
+	static const char *partials[] = { " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉" };
+	int remainder = len_left % 8;
+	len_left /= 8;
+
+	const char *partial = NULL;
+	if (g.use_partial_boxes)
+		partial = partials[remainder];
+	else
+		len_left += remainder >= (int) 4;
+
+	int len_right = self->width - len_left;
+	row_buffer_space (&buf, len_left, APP_ATTR (ELAPSED));
+	if (partial && len_right-- > 0)
+		row_buffer_append (&buf, partial, APP_ATTR (REMAINS));
+	row_buffer_space (&buf, len_right, APP_ATTR (REMAINS));
+
+out:
+	tui_flush_buffer (self, &buf);
+}
+
+// TODO: Perhaps it should save the number within.
+static struct widget *
+tui_make_gauge (chtype attrs)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = tui_render_gauge;
+	w->attrs = attrs;
+	w->width = -1;
+	w->height = 1;
+	return w;
+}
+
+static void
+tui_render_spectrum (struct widget *self)
+{
+	// Don't mess up the line editor caret, when it's shown
+	int last_x, last_y;
+	getyx (stdscr, last_y, last_x);
+
+	struct row_buffer buf = row_buffer_make ();
+#ifdef WITH_FFTW
+	row_buffer_append (&buf, g.spectrum.rendered, self->attrs);
+#endif   // WITH_FFTW
+	tui_flush_buffer (self, &buf);
+
+	move (last_y, last_x);
+}
+
+static struct widget *
+tui_make_spectrum (chtype attrs, int width)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = tui_render_spectrum;
+	w->attrs = attrs;
+	w->width = width;
+	w->height = 1;
+	return w;
+}
+
+static void
+tui_render_scrollbar (struct widget *self)
+{
+	// This assumes that we can write to the one-before-last column,
+	// i.e. that it's not covered by any double-wide character (and that
+	// ncurses comes to the right results when counting characters).
+	struct tab *tab = g.active_tab;
+	int visible_items = app_visible_items ();
+
+	hard_assert (tab->item_count != 0);
+	if (!g.use_partial_boxes)
+	{
+		struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 1);
+		for (int row = 0; row < visible_items; row++)
+		{
+			move (self->y + row, self->x);
+			if (row < bar.start || row >= bar.start + bar.length)
+				addch (' ' | self->attrs);
+			else
+				addch (' ' | self->attrs | A_REVERSE);
+		}
+		return;
+	}
+
+	struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 8);
+	bar.length += bar.start;
+
+	int start_part = bar.start  % 8; bar.start  /= 8;
+	int end_part   = bar.length % 8; bar.length /= 8;
+
+	// Even with this, the solid part must be at least one character high
+	static const char *partials[] = { "█", "▇", "▆", "▅", "▄", "▃", "▂", "▁" };
+
+	for (int row = 0; row < visible_items; row++)
+	{
+		chtype attrs = self->attrs;
+		if (row > bar.start && row <= bar.length)
+			attrs ^= A_REVERSE;
+
+		const char *c = " ";
+		if (row == bar.start)  c = partials[start_part];
+		if (row == bar.length) c = partials[end_part];
+
+		move (self->y + row, self->x);
+
+		struct row_buffer buf = row_buffer_make ();
+		row_buffer_append (&buf, c, attrs);
+		row_buffer_flush (&buf);
+		row_buffer_free (&buf);
+	}
+}
+
+static struct widget *
+tui_make_scrollbar (chtype attrs)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = tui_render_scrollbar;
+	w->attrs = attrs;
+	w->width = 1;
+	return w;
+}
+
+static void
+tui_render_list (struct widget *self)
+{
+	struct tab *tab = g.active_tab;
+	int to_show =
+		MIN (app_visible_items (), (int) tab->item_count - tab->item_top);
+	for (int row = 0; row < to_show; row++)
+	{
+		int item_index = tab->item_top + row;
+		struct widget *head = app_layout_row (tab, item_index);
+		widget_redistribute (head, self->width);
+
+		int x = self->x;
+		int y = self->y + row * g.ui_vunit;
+		LIST_FOR_EACH (struct widget, w, head)
+		{
+			w->x += x;
+			w->y += y;
+		}
+
+		LIST_FOR_EACH (struct widget, w, head)
+		{
+			w->on_render (w);
+			free (w);
+		}
+	}
+}
+
+static struct widget *
+tui_make_list (void)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->width = -1;
+	w->height = g.active_tab->item_count;
+	w->on_render = tui_render_list;
+	return w;
+}
+
+static void
+tui_render_editor (struct widget *self)
+{
+	struct row_buffer buf = row_buffer_make ();
+	int caret = line_editor_write (&g.editor, &buf, self->width, self->attrs);
+	tui_flush_buffer (self, &buf);
+
+	// FIXME: This should be at the end of of tui_render().
+	move (self->y, self->x + caret);
+	curs_set (1);
+}
+
+static struct widget *
+tui_make_editor (chtype attrs)
+{
+	// TODO: This should ideally measure the text, and copy it to w->text.
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = tui_render_editor;
+	w->attrs = attrs;
+	w->width = -1;
+	w->height = 1;
+	return w;
+}
+
+static void
+tui_render (void)
+{
+	erase ();
+	curs_set (0);
+
+	LIST_FOR_EACH (struct widget, w, g.widgets.head)
+		if (w->width >= 0 && w->height >= 0)
+			w->on_render (w);
+}
+
+static void
+tui_flip (void)
+{
+	// Curses handles double-buffering for us automatically.
+	refresh ();
+}
+
+static void
+tui_winch (void)
+{
+	// The standard endwin/refresh sequence makes the terminal flicker
+#if defined HAVE_RESIZETERM && defined TIOCGWINSZ
+	struct winsize size;
+	if (!ioctl (STDOUT_FILENO, TIOCGWINSZ, (char *) &size))
+	{
+		char *row = getenv ("LINES");
+		char *col = getenv ("COLUMNS");
+		unsigned long tmp;
+		resizeterm (
+			(row && xstrtoul (&tmp, row, 10)) ? tmp : size.ws_row,
+			(col && xstrtoul (&tmp, col, 10)) ? tmp : size.ws_col);
+	}
+#else  // HAVE_RESIZETERM && TIOCGWINSZ
+	endwin ();
+	refresh ();
+#endif  // HAVE_RESIZETERM && TIOCGWINSZ
+
+	g.ui_width = COLS;
+	g.ui_height = LINES;
+	app_invalidate ();
+}
+
+static void
+tui_destroy (void)
+{
+	endwin ();
+}
+
+static struct ui tui_ui =
+{
+	.padding     = tui_make_padding,
+	.label       = tui_make_label,
+	.button      = tui_make_button,
+	.gauge       = tui_make_gauge,
+	.spectrum    = tui_make_spectrum,
+	.scrollbar   = tui_make_scrollbar,
+	.list        = tui_make_list,
+	.editor      = tui_make_editor,
+
+	.render      = tui_render,
+	.flip        = tui_flip,
+	.winch       = tui_winch,
+	.destroy     = tui_destroy,
+};
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+tui_on_tty_event (termo_key_t *event, int64_t event_ts)
+{
+	// Simple double click detection via release--press delay, only a bit
+	// complicated by the fact that we don't know what's being released
+	static termo_key_t last_event;
+	static int64_t last_event_ts;
+	static int last_button;
+
+	int y, x, button, y_last, x_last;
+	termo_mouse_event_t type, type_last;
+	if (termo_interpret_mouse (g.tk, event, &type, &button, &y, &x))
+	{
+		bool double_click = termo_interpret_mouse
+			(g.tk, &last_event, &type_last, NULL, &y_last, &x_last)
+			&& event_ts - last_event_ts < 500
+			&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
+			&& y_last == y && x_last == x && last_button == button;
+		if (!app_process_mouse (type, x, y, button, double_click))
+			beep ();
+
+		// Prevent interpreting triple clicks as two double clicks
+		if (double_click)
+			last_button = 0;
+		else if (type == TERMO_MOUSE_PRESS)
+			last_button = button;
+	}
+	else if (!app_process_termo_event (event))
+		beep ();
+
+	last_event = *event;
+	last_event_ts = event_ts;
+}
+
+static void
+tui_on_tty_readable (const struct pollfd *fd, void *user_data)
+{
+	(void) user_data;
+	if (fd->revents & ~(POLLIN | POLLHUP | POLLERR))
+		print_debug ("fd %d: unexpected revents: %d", fd->fd, fd->revents);
+
+	poller_timer_reset (&g.tk_timer);
+	termo_advisereadable (g.tk);
+
+	termo_key_t event;
+	int64_t event_ts = clock_msec (CLOCK_BEST);
+	termo_result_t res;
+	while ((res = termo_getkey (g.tk, &event)) == TERMO_RES_KEY)
+		tui_on_tty_event (&event, event_ts);
+
+	if (res == TERMO_RES_AGAIN)
+		poller_timer_set (&g.tk_timer, termo_get_waittime (g.tk));
+	else if (res == TERMO_RES_ERROR || res == TERMO_RES_EOF)
+		app_quit ();
+}
+
+static void
+tui_on_key_timer (void *user_data)
+{
+	(void) user_data;
+
+	termo_key_t event;
+	if (termo_getkey_force (g.tk, &event) == TERMO_RES_KEY)
+		if (!app_process_termo_event (&event))
+			beep ();
+}
+
+static void
+tui_init (void)
+{
+	poller_fd_set (&g.tty_event, POLLIN);
+	if (!termo_start (g.tk) || !initscr () || nonl () == ERR)
+		exit_fatal ("failed to set up the terminal");
+
+	g.ui = &tui_ui;
+	g.ui_width = COLS;
+	g.ui_height = LINES;
+	g.ui_vunit = 1;
+	g.ui_hunit = 1;
+
+	// By default we don't use any colors so they're not required...
+	if (start_color () == ERR
+	 || use_default_colors () == ERR
+	 || COLOR_PAIRS <= ATTRIBUTE_COUNT)
+		return;
+
+	for (int a = 0; a < ATTRIBUTE_COUNT; a++)
+	{
+		// ...thus we can reset back to defaults even after initializing some
+		// FIXME: that's a lie now, MULTISELECT requires a colour
+		if (g.attrs[a].fg >= COLORS || g.attrs[a].fg < -1
+		 || g.attrs[a].bg >= COLORS || g.attrs[a].bg < -1)
+		{
+			app_init_attributes ();
+			return;
+		}
+
+		init_pair (a + 1, g.attrs[a].fg, g.attrs[a].bg);
+		g.attrs[a].attrs |= COLOR_PAIR (a + 1);
+	}
+}
+
+// --- X11 ---------------------------------------------------------------------
+
+#ifdef WITH_X11
+
+static XRenderColor x11_default_fg = { .alpha = 0xffff };
+static XRenderColor x11_default_bg = { 0xffff, 0xffff, 0xffff, 0xffff };
+static XErrorHandler x11_default_error_handler;
+
+static XftFont *
+x11_font (struct widget *self)
+{
+	return (self->attrs & A_BOLD) ? g.xft_bold : g.xft_regular;
+}
+
+static XRenderColor *
+x11_fg_attrs (chtype attrs)
+{
+	int pair = PAIR_NUMBER (attrs);
+	if (!pair--)
+		return &x11_default_fg;
+	return (attrs & A_REVERSE) ? &g.x_bg[pair] : &g.x_fg[pair];
+}
+
+static XRenderColor *
+x11_fg (struct widget *self)
+{
+	return x11_fg_attrs (self->attrs);
+}
+
+static XRenderColor *
+x11_bg_attrs (chtype attrs)
+{
+	int pair = PAIR_NUMBER (attrs);
+	if (!pair--)
+		return &x11_default_bg;
+	return (attrs & A_REVERSE) ? &g.x_fg[pair] : &g.x_bg[pair];
+}
+
+static XRenderColor *
+x11_bg (struct widget *self)
+{
+	return x11_bg_attrs (self->attrs);
+}
+
+static void
+x11_render_padding (struct widget *self)
+{
+	if (PAIR_NUMBER (self->attrs))
+	{
+		XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+			x11_bg (self), self->x, self->y, self->width, self->height);
+	}
+	if (self->attrs & A_UNDERLINE)
+	{
+		XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+			x11_fg (self), self->x, self->y + self->height - 1, self->width, 1);
+	}
+}
+
+static struct widget *
+x11_make_padding (chtype attrs, float width, float height)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 2);
+	w->text[0] = ' ';
+	w->on_render = x11_render_padding;
+	w->attrs = attrs;
+	w->width = g.ui_vunit * width;
+	w->height = g.ui_vunit * height;
+	return w;
+}
+
+static void
+x11_render_label (struct widget *self)
+{
+	x11_render_padding (self);
+
+	int space = MIN (self->width, g.ui_width - self->x);
+	if (space <= 0)
+		return;
+
+	// TODO: Try to avoid re-measuring on each render.
+	XftFont *font = x11_font (self);
+	XGlyphInfo extents = {};
+	XftTextExtentsUtf8 (g.dpy, font,
+		(const FcChar8 *) self->text, strlen (self->text), &extents);
+	if (extents.xOff <= space)
+	{
+		XftColor color = { .color = *x11_fg (self) };
+		XftDrawStringUtf8 (g.xft_draw, &color, font,
+			self->x, self->y + font->ascent,
+			(const FcChar8 *) self->text, strlen (self->text));
+		return;
+	}
+
+	// XRender doesn't extend gradients beyond their end stops.
+	XRenderColor solid = *x11_fg (self), colors[3] = { solid, solid, solid };
+	colors[2].alpha = 0;
+
+	double portion = MIN (1, 2.0 * font->height / space);
+	XFixed stops[3] = { 0, XDoubleToFixed (1 - portion), XDoubleToFixed (1) };
+	XLinearGradient gradient = { {}, { XDoubleToFixed (space), 0 } };
+
+	// Note that this masking is a very expensive operation.
+	Picture source =
+		XRenderCreateLinearGradient (g.dpy, &gradient, stops, colors, 3);
+	XftTextRenderUtf8 (g.dpy, PictOpOver, source, font, g.x11_pixmap_picture,
+		-self->x, 0, self->x, self->y + font->ascent,
+		(const FcChar8 *) self->text, strlen (self->text));
+	XRenderFreePicture (g.dpy, source);
+}
+
+static struct widget *
+x11_make_label (chtype attrs, const char *label)
+{
+	size_t len = strlen (label);
+	struct widget *w = xcalloc (1, sizeof *w + len + 1);
+	w->on_render = x11_render_label;
+	w->attrs = attrs;
+	memcpy (w + 1, label, len);
+
+	XftFont *font = x11_font (w);
+	XGlyphInfo extents = {};
+	XftTextExtentsUtf8 (g.dpy, font, (const FcChar8 *) label, len, &extents);
+	w->width = extents.xOff;
+	w->height = font->height;
+	return w;
+}
+
+// On a 20x20 raster to make it feasible to design on paper.
+static const XPointDouble x11_stop = {INFINITY, INFINITY},
+	x11_icon_previous[] =
+	{
+		{10, 0}, {0, 10}, {10, 20}, x11_stop,
+		{20, 0}, {10, 10}, {20, 20}, x11_stop, x11_stop,
+	},
+	x11_icon_pause[] =
+	{
+		{1, 0}, {7, 0}, {7, 20}, {1, 20}, x11_stop,
+		{13, 0}, {19, 0}, {19, 20}, {13, 20}, x11_stop, x11_stop,
+	},
+	x11_icon_play[] =
+	{
+		{0, 0}, {20, 10}, {0, 20}, x11_stop, x11_stop,
+	},
+	x11_icon_stop[] =
+	{
+		{0, 0}, {20, 0}, {20, 20}, {0, 20}, x11_stop, x11_stop,
+	},
+	x11_icon_next[] =
+	{
+		{0, 0}, {10, 10}, {0, 20}, x11_stop,
+		{10, 0}, {20, 10}, {10, 20}, x11_stop, x11_stop,
+	},
+	x11_icon_repeat[] =
+	{
+		{0, 12}, {0, 6}, {3, 3}, {13, 3}, {13, 0}, {20, 4.5},
+		{13, 9}, {13, 6}, {3, 6}, {3, 10}, x11_stop,
+		{0, 15.5}, {7, 11}, {7, 14}, {17, 14}, {17, 10}, {20, 8},
+		{20, 14}, {17, 17}, {7, 17}, {7, 20}, x11_stop, x11_stop,
+	},
+	x11_icon_random[] =
+	{
+		{0, 6}, {0, 3}, {5, 3}, {6, 4.5}, {4, 7.5}, {3, 6}, x11_stop,
+		{9, 15.5}, {11, 12.5}, {12, 14}, {13, 14}, {13, 11}, {20, 15.5},
+		{13, 20}, {13, 17}, {10, 17}, x11_stop,
+		{0, 17}, {0, 14}, {3, 14}, {10, 3}, {13, 3}, {13, 0}, {20, 4.5},
+		{13, 9}, {13, 6}, {12, 6}, {5, 17}, x11_stop, x11_stop,
+	},
+	x11_icon_single[] =
+	{
+		{7, 6}, {7, 4}, {9, 2}, {12, 2}, {12, 15}, {14, 15}, {14, 18},
+		{7, 18}, {7, 15}, {9, 15}, {9, 6}, x11_stop, x11_stop,
+	},
+	x11_icon_consume[] =
+	{
+		{0, 13}, {0, 7}, {4, 3}, {10, 3}, {14, 7}, {5, 10}, {14, 13},
+		{10, 17}, {4, 17}, x11_stop,
+		{16, 12}, {16, 8}, {20, 8}, {20, 12}, x11_stop, x11_stop,
+	};
+
+static const XPointDouble *
+x11_icon_for_action (enum action action)
+{
+	switch (action)
+	{
+	case ACTION_MPD_PREVIOUS:
+		return x11_icon_previous;
+	case ACTION_MPD_TOGGLE:
+		return g.state == PLAYER_PLAYING ? x11_icon_pause : x11_icon_play;
+	case ACTION_MPD_STOP:
+		return x11_icon_stop;
+	case ACTION_MPD_NEXT:
+		return x11_icon_next;
+	case ACTION_MPD_REPEAT:
+		return x11_icon_repeat;
+	case ACTION_MPD_RANDOM:
+		return x11_icon_random;
+	case ACTION_MPD_SINGLE:
+		return x11_icon_single;
+	case ACTION_MPD_CONSUME:
+		return x11_icon_consume;
+	default:
+		return NULL;
+	}
+}
+
+static void
+x11_render_button (struct widget *self)
+{
+	x11_render_padding (self);
+
+	const XPointDouble *icon = x11_icon_for_action (self->subid);
+	if (!icon)
+	{
+		x11_render_label (self);
+		return;
+	}
+
+	size_t total = 0;
+	for (size_t i = 0; icon[i].x != INFINITY || icon[i - 1].x != INFINITY; i++)
+		total++;
+
+	// TODO: There should be an attribute for buttons, to handle this better.
+	XRenderColor color = *x11_fg (self);
+	if (!(self->attrs & A_BOLD))
+	{
+		color.alpha /= 2;
+		color.red /= 2;
+		color.green /= 2;
+		color.blue /= 2;
+	}
+
+	Picture source = XRenderCreateSolidFill (g.dpy, &color);
+	const XRenderPictFormat *format
+		= XRenderFindStandardFormat (g.dpy, PictStandardA8);
+
+	int x = self->x, y = self->y + (self->height - self->width) / 2;
+	XPointDouble buffer[total], *p = buffer;
+	for (size_t i = 0; i < total; i++)
+		if (icon[i].x != INFINITY)
+		{
+			p->x = x + icon[i].x / 20.0 * self->width;
+			p->y = y + icon[i].y / 20.0 * self->width;
+			p++;
+		}
+		else if (p != buffer)
+		{
+			XRenderCompositeDoublePoly (g.dpy, PictOpOver,
+				source, g.x11_pixmap_picture, format,
+				0, 0, 0, 0, buffer, p - buffer, EvenOddRule);
+			p = buffer;
+		}
+	XRenderFreePicture (g.dpy, source);
+}
+
+static struct widget *
+x11_make_button (chtype attrs, const char *label, enum action a)
+{
+	struct widget *w = x11_make_label (attrs, label);
+	w->id = WIDGET_BUTTON;
+	w->subid = a;
+
+	if (x11_icon_for_action (a))
+	{
+		w->on_render = x11_render_button;
+
+		// It should be padded by the caller horizontally.
+		w->height = g.ui_vunit;
+		w->width = w->height * 3 / 4;
+	}
+	return w;
+}
+
+static void
+x11_render_gauge (struct widget *self)
+{
+	x11_render_padding (self);
+	if (g.state == PLAYER_STOPPED || g.song_elapsed < 0 || g.song_duration < 1)
+		return;
+
+	int part = (float) g.song_elapsed / g.song_duration * self->width;
+	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+		x11_bg_attrs (APP_ATTR (ELAPSED)),
+		self->x,
+		self->y + self->height / 8,
+		part,
+		self->height * 3 / 4);
+	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+		x11_bg_attrs (APP_ATTR (REMAINS)),
+		self->x + part,
+		self->y + self->height / 8,
+		self->width - part,
+		self->height * 3 / 4);
+}
+
+// TODO: Perhaps it should save the number within.
+static struct widget *
+x11_make_gauge (chtype attrs)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = x11_render_gauge;
+	w->attrs = attrs;
+	w->width = -1;
+	w->height = g.ui_vunit;
+	return w;
+}
+
+static void
+x11_render_spectrum (struct widget *self)
+{
+	x11_render_padding (self);
+
+#ifdef WITH_FFTW
+	int step = self->width / g.spectrum.bars;
+	for (int i = 0; i < g.spectrum.bars; i++)
+	{
+		float value = g.spectrum.spectrum[i];
+		int height = round ((self->height - 2) * value);
+		XRenderFillRectangle (g.dpy, PictOpSrc,
+			g.x11_pixmap_picture, x11_fg (self),
+			self->x + i * step,
+			self->y + self->height - 1 - height,
+			step,
+			height);
+	}
+#endif   // WITH_FFTW
+}
+
+static struct widget *
+x11_make_spectrum (chtype attrs, int width)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = x11_render_spectrum;
+	w->attrs = attrs;
+	w->width = width * g.ui_vunit / 2;
+	w->height = g.ui_vunit;
+	return w;
+}
+
+static void
+x11_render_scrollbar (struct widget *self)
+{
+	x11_render_padding (self);
+
+	struct tab *tab = g.active_tab;
+	// FIXME: This isn't an integer number in this case.
+	int visible_items = app_visible_items ();
+	struct scrollbar bar =
+		app_compute_scrollbar (tab, visible_items, g.ui_vunit);
+
+	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+		x11_fg_attrs (self->attrs),
+		self->x,
+		self->y + bar.start,
+		self->width,
+		bar.length);
+}
+
+static struct widget *
+x11_make_scrollbar (chtype attrs)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = x11_render_scrollbar;
+	w->attrs = attrs;
+	w->width = g.ui_vunit / 2;
+	return w;
+}
+
+// TODO: Handle partial items, otherwise this is the same as tui_render_list().
+static void
+x11_render_list (struct widget *self)
+{
+	x11_render_padding (self);
+
+	struct tab *tab = g.active_tab;
+	int to_show =
+		MIN (app_visible_items (), (int) tab->item_count - tab->item_top);
+	for (int row = 0; row < to_show; row++)
+	{
+		int item_index = tab->item_top + row;
+		struct widget *head = app_layout_row (tab, item_index);
+		widget_redistribute (head, self->width);
+
+		int x = self->x;
+		int y = self->y + row * g.ui_vunit;
+		LIST_FOR_EACH (struct widget, w, head)
+		{
+			w->x += x;
+			w->y += y;
+		}
+
+		LIST_FOR_EACH (struct widget, w, head)
+		{
+			w->on_render (w);
+			free (w);
+		}
+	}
+}
+
+static struct widget *
+x11_make_list (void)
+{
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = x11_render_list;
+	return w;
+}
+
+static void
+x11_render_editor (struct widget *self)
+{
+	x11_render_padding (self);
+
+	XftFont *font = x11_font (self);
+	XftColor color = { .color = *x11_fg (self) };
+
+	// A simplistic adaptation of line_editor_write() follows.
+	int x = self->x, y = self->y + font->ascent;
+	XGlyphInfo extents = {};
+	if (g.editor.prompt)
+	{
+		FT_UInt i = XftCharIndex (g.dpy, font, g.editor.prompt);
+		XftDrawGlyphs (g.xft_draw, &color, font, x, y, &i, 1);
+		XftGlyphExtents (g.dpy, font, &i, 1, &extents);
+		x += extents.xOff + g.ui_vunit / 4;
+	}
+
+	// TODO: Make this scroll around the caret, and fade like labels.
+	XftDrawString32 (g.xft_draw, &color, font, x, y,
+		g.editor.line, g.editor.len);
+
+	XftTextExtents32 (g.dpy, font, g.editor.line, g.editor.point, &extents);
+	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+		&color.color, x + extents.xOff, self->y, 2, self->height);
+}
+
+static struct widget *
+x11_make_editor (chtype attrs)
+{
+	// TODO: This should ideally measure the text, and copy it to w->text.
+	struct widget *w = xcalloc (1, sizeof *w + 1);
+	w->on_render = x11_render_editor;
+	w->attrs = attrs;
+	w->width = -1;
+	w->height = g.ui_vunit;
+	return w;
+}
+
+static void
+x11_render (void)
+{
+	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+		&x11_default_bg, 0, 0, g.ui_width, g.ui_height);
+
+	// TODO: Consider setting clip rectangles (not particularly needed).
+	LIST_FOR_EACH (struct widget, w, g.widgets.head)
+		if (w->width && w->height)
+			w->on_render (w);
+	poller_idle_set (&g.xpending_event);
+}
+
+static void
+x11_flip (void)
+{
+	XCopyArea (g.dpy, g.x11_pixmap, g.x11_window,
+		DefaultGC (g.dpy, DefaultScreen (g.dpy)),
+		0, 0, g.ui_width, g.ui_height, 0, 0);
+	poller_idle_set (&g.xpending_event);
+}
+
+static void
+x11_destroy (void)
+{
+	XDestroyWindow (g.dpy, g.x11_window);
+	XRenderFreePicture (g.dpy, g.x11_pixmap_picture);
+	XFreePixmap (g.dpy, g.x11_pixmap);
+	XftDrawDestroy (g.xft_draw);
+	XftFontClose (g.dpy, g.xft_regular);
+	XftFontClose (g.dpy, g.xft_bold);
+
+	poller_fd_reset (&g.x11_event);
+	XCloseDisplay (g.dpy);
+}
+
+static struct ui x11_ui =
+{
+	.padding     = x11_make_padding,
+	.label       = x11_make_label,
+	.button      = x11_make_button,
+	.gauge       = x11_make_gauge,
+	.spectrum    = x11_make_spectrum,
+	.scrollbar   = x11_make_scrollbar,
+	.list        = x11_make_list,
+	.editor      = x11_make_editor,
+
+	.render      = x11_render,
+	.flip        = x11_flip,
+	.destroy     = x11_destroy,
+	.have_icons  = true,
+};
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static termo_sym_t
+x11_convert_keysym (KeySym keysym)
+{
+	// Leaving out TERMO_TYPE_FUNCTION, TERMO_SYM_DEL (N/A),
+	// and TERMO_SYM_SPACE (governed by TERMO_FLAG_SPACESYMBOL, not in use).
+	switch (keysym)
+	{
+	case XK_BackSpace:     return TERMO_SYM_BACKSPACE;
+	case XK_Tab:           return TERMO_SYM_TAB;
+	case XK_Return:        return TERMO_SYM_ENTER;
+	case XK_Escape:        return TERMO_SYM_ESCAPE;
+
+	case XK_Up:            return TERMO_SYM_UP;
+	case XK_Down:          return TERMO_SYM_DOWN;
+	case XK_Left:          return TERMO_SYM_LEFT;
+	case XK_Right:         return TERMO_SYM_RIGHT;
+	case XK_Begin:         return TERMO_SYM_BEGIN;
+	case XK_Find:          return TERMO_SYM_FIND;
+	case XK_Insert:        return TERMO_SYM_INSERT;
+	case XK_Delete:        return TERMO_SYM_DELETE;
+	case XK_Select:        return TERMO_SYM_SELECT;
+	case XK_Page_Up:       return TERMO_SYM_PAGEUP;
+	case XK_Page_Down:     return TERMO_SYM_PAGEDOWN;
+	case XK_Home:          return TERMO_SYM_HOME;
+	case XK_End:           return TERMO_SYM_END;
+
+	case XK_Cancel:        return TERMO_SYM_CANCEL;
+	case XK_Clear:         return TERMO_SYM_CLEAR;
+	// TERMO_SYM_CLOSE
+	// TERMO_SYM_COMMAND
+	// TERMO_SYM_COPY
+	// TERMO_SYM_EXIT
+	case XK_Help:          return TERMO_SYM_HELP;
+	// TERMO_SYM_MARK
+	// TERMO_SYM_MESSAGE
+	// TERMO_SYM_MOVE
+	// TERMO_SYM_OPEN
+	// TERMO_SYM_OPTIONS
+	case XK_Print:         return TERMO_SYM_PRINT;
+	case XK_Redo:          return TERMO_SYM_REDO;
+	// TERMO_SYM_REFERENCE
+	// TERMO_SYM_REFRESH
+	// TERMO_SYM_REPLACE
+	// TERMO_SYM_RESTART
+	// TERMO_SYM_RESUME
+	// TERMO_SYM_SAVE
+	// TERMO_SYM_SUSPEND
+	case XK_Undo:          return TERMO_SYM_UNDO;
+
+	case XK_KP_0:          return TERMO_SYM_KP0;
+	case XK_KP_1:          return TERMO_SYM_KP1;
+	case XK_KP_2:          return TERMO_SYM_KP2;
+	case XK_KP_3:          return TERMO_SYM_KP3;
+	case XK_KP_4:          return TERMO_SYM_KP4;
+	case XK_KP_5:          return TERMO_SYM_KP5;
+	case XK_KP_6:          return TERMO_SYM_KP6;
+	case XK_KP_7:          return TERMO_SYM_KP7;
+	case XK_KP_8:          return TERMO_SYM_KP8;
+	case XK_KP_9:          return TERMO_SYM_KP9;
+	case XK_KP_Enter:      return TERMO_SYM_KPENTER;
+	case XK_KP_Add:        return TERMO_SYM_KPPLUS;
+	case XK_KP_Subtract:   return TERMO_SYM_KPMINUS;
+	case XK_KP_Multiply:   return TERMO_SYM_KPMULT;
+	case XK_KP_Divide:     return TERMO_SYM_KPDIV;
+	case XK_KP_Separator:  return TERMO_SYM_KPCOMMA;
+	case XK_KP_Decimal:    return TERMO_SYM_KPPERIOD;
+	case XK_KP_Equal:      return TERMO_SYM_KPEQUALS;
+	}
+	return TERMO_SYM_UNKNOWN;
+}
+
+static void
+on_x11_keypress (XEvent *e)
+{
+	XKeyEvent *ev = &e->xkey;
+	unsigned unconsumed_mods = 0;
+	KeySym keysym = None;
+	if (!XkbLookupKeySym (g.dpy,
+			(KeyCode) ev->keycode, ev->state, &unconsumed_mods, &keysym))
+		return;
+
+	termo_key_t key = {};
+	if (ev->state & ShiftMask)
+		key.modifiers |= TERMO_KEYMOD_SHIFT;
+	if (ev->state & ControlMask)
+		key.modifiers |= TERMO_KEYMOD_CTRL;
+	if (ev->state & Mod1Mask)
+		key.modifiers |= TERMO_KEYMOD_ALT;
+
+	if (keysym >= XK_F1 && keysym <= XK_F35)
+	{
+		key.type = TERMO_TYPE_FUNCTION;
+		key.code.number = 1 + keysym - XK_F1;
+	}
+	else if ((key.code.sym = x11_convert_keysym (keysym)) != TERMO_SYM_UNKNOWN)
+		key.type = TERMO_TYPE_KEYSYM;
+	else if ((key.code.codepoint = xkb_keysym_to_utf32 (keysym)))
+	{
+		// Not filling in UTF-8, but xkb_keysym_to_utf8() exists.
+		key.type = TERMO_TYPE_KEY;
+		key.modifiers &= ~TERMO_KEYMOD_SHIFT;
+	}
+	else
+		return;
+
+	app_process_termo_event (&key);
+}
+
+static void
+x11_init_pixmap (void)
+{
+	int screen = DefaultScreen (g.dpy);
+	g.x11_pixmap = XCreatePixmap (g.dpy, g.x11_window,
+		g.ui_width, g.ui_height, DefaultDepth (g.dpy, screen));
+
+	Visual *visual = DefaultVisual (g.dpy, screen);
+	XRenderPictFormat *format = XRenderFindVisualFormat (g.dpy, visual);
+	g.x11_pixmap_picture
+		= XRenderCreatePicture (g.dpy, g.x11_pixmap, format, 0, NULL);
+}
+
+static void
+on_x11_input_event (XEvent *ev)
+{
+	static XEvent last_button_event;
+	if (ev->type == KeyPress)
+	{
+		last_button_event = (XEvent) {};
+		on_x11_keypress (ev);
+		return;
+	}
+
+	// See tui_on_tty_event().  Just here we know the button on button release.
+	int x = ev->xbutton.x, y = ev->xbutton.y;
+	unsigned int button = ev->xbutton.button;
+	bool double_click = ev->xbutton.time - last_button_event.xbutton.time < 500
+		&& last_button_event.type == ButtonRelease && ev->type == ButtonPress
+		&& abs (last_button_event.xbutton.x - x) < 5
+		&& abs (last_button_event.xbutton.y - y) < 5
+		&& last_button_event.xbutton.button == button;
+
+	if (ev->type == ButtonPress)
+		app_process_mouse (TERMO_MOUSE_PRESS, x, y, button, double_click);
+	if (ev->type == ButtonRelease)
+		app_process_mouse (TERMO_MOUSE_RELEASE, x, y, button, double_click);
+
+	// Prevent interpreting triple clicks as two double clicks.
+	last_button_event = (XEvent) {};
+	if (!double_click)
+		last_button_event = *ev;
+}
+
+static void
+on_x11_event (XEvent *ev)
+{
+	termo_key_t key = {};
+	switch (ev->type)
+	{
+	case Expose:
+		if (!ev->xexpose.count)
+			poller_idle_set (&g.flip_event);
+		break;
+	case FocusIn:
+		key.type = TERMO_TYPE_FOCUS;
+		key.code.focused = true;
+		app_process_termo_event (&key);
+		break;
+	case FocusOut:
+		key.type = TERMO_TYPE_FOCUS;
+		key.code.focused = false;
+		app_process_termo_event (&key);
+		break;
+	case KeyPress:
+	case ButtonPress:
+	case ButtonRelease:
+		on_x11_input_event (ev);
+		break;
+	case UnmapNotify:
+		app_quit ();
+		break;
+	case ConfigureNotify:
+		if (g.ui_width == ev->xconfigure.width
+		 && g.ui_height == ev->xconfigure.height)
+			break;
+
+		g.ui_width = ev->xconfigure.width;
+		g.ui_height = ev->xconfigure.height;
+
+		XRenderFreePicture (g.dpy, g.x11_pixmap_picture);
+		XFreePixmap (g.dpy, g.x11_pixmap);
+		x11_init_pixmap ();
+		XftDrawChange (g.xft_draw, g.x11_pixmap);
+		app_invalidate ();
+	}
+}
+
+static void
+on_x11_pending (void *user_data)
+{
+	(void) user_data;
+
+	XkbEvent ev;
+	while (XPending (g.dpy))
+	{
+		if (XNextEvent (g.dpy, &ev.core))
+			exit_fatal ("XNextEvent returned non-zero");
+		on_x11_event (&ev.core);
+	}
+
+	poller_idle_reset (&g.xpending_event);
+}
+
+static void
+on_x11_ready (const struct pollfd *pfd, void *user_data)
+{
+	(void) pfd;
+	on_x11_pending (user_data);
+}
+
+static int
+on_x11_error (Display *dpy, XErrorEvent *event)
+{
+	// Without opting for WM_DELETE_WINDOW, this window can become destroyed
+	// and hence invalid at any time.  We don't use the Window much,
+	// so we should be fine ignoring these errors.
+	if ((event->error_code == BadWindow && event->resourceid == g.x11_window)
+	 || (event->error_code == BadDrawable && event->resourceid == g.x11_window))
+		return app_quit (), 0;
+
+	return x11_default_error_handler (dpy, event);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static XRenderColor
+x11_convert_color (int color)
+{
+	hard_assert (color >= 0 && color <= 255);
+
+	static const uint16_t base[16] =
+	{
+		0x000, 0x800, 0x080, 0x880, 0x008, 0x808, 0x088, 0xccc,
+		0x888, 0xf00, 0x0f0, 0xff0, 0x00f, 0xf0f, 0x0ff, 0xfff,
+	};
+
+	XRenderColor c = { .alpha = 0xffff };
+	if (color < 16)
+	{
+		c.red   = 0x1111 *        (base[color] >> 8);
+		c.green = 0x1111 * (0xf & (base[color] >> 4));
+		c.blue  = 0x1111 * (0xf & (base[color]));
+	}
+	else if (color >= 232)
+		c.red = c.green = c.blue = 0x0101 * (8 + (color - 232) * 10);
+	else
+	{
+		color -= 16;
+
+		int r =  color / 36;
+		int g = (color / 6) % 6;
+		int b = (color % 6);
+		c.red   = 0x0101 * !!r * (55 + 40 * r);
+		c.green = 0x0101 * !!g * (55 + 40 * g);
+		c.blue  = 0x0101 * !!b * (55 + 40 * b);
+	}
+	return c;
+}
+
+static void
+x11_init_attributes (void)
+{
+	for (int a = 0; a < ATTRIBUTE_COUNT; a++)
+	{
+		g.x_fg[a] = x11_default_fg;
+		g.x_bg[a] = x11_default_bg;
+		if (g.attrs[a].fg >= 256 || g.attrs[a].fg < -1
+		 || g.attrs[a].bg >= 256 || g.attrs[a].bg < -1)
+			continue;
+
+		if (g.attrs[a].fg != -1)
+			g.x_fg[a] = x11_convert_color (g.attrs[a].fg);
+		if (g.attrs[a].bg != -1)
+			g.x_bg[a] = x11_convert_color (g.attrs[a].bg);
+
+		g.attrs[a].attrs |= COLOR_PAIR (a + 1);
+	}
+}
+
+static void
+x11_init_fonts (void)
+{
+	// TODO: Try to use Gtk/FontName from the _XSETTINGS_S%d selection,
+	//   as well as Net/DoubleClick*.  See the XSETTINGS proposal for details.
+	//   https://www.freedesktop.org/wiki/Specifications/XSettingsRegistry/
+	const char *name = get_config_string (g.config.root, "settings.x11_font");
+	int screen = DefaultScreen (g.dpy);
+	FcResult result = 0;
+
+	FcPattern *query_regular = FcNameParse ((const FcChar8 *) name);
+	FcPattern *query_bold = FcPatternDuplicate (query_regular);
+	FcPatternAdd (query_bold, FC_STYLE,
+		(FcValue) { .type = FcTypeString, .u.s = (FcChar8 *) "Bold" }, FcFalse);
+
+	FcPattern *regular = XftFontMatch (g.dpy, screen, query_regular, &result);
+	FcPatternDestroy (query_regular);
+	if (!regular)
+		exit_fatal ("cannot open font: %s (%d)", name, result);
+	if (!(g.xft_regular = XftFontOpenPattern (g.dpy, regular)))
+	{
+		FcPatternDestroy (regular);
+		exit_fatal ("cannot open font: %s", name);
+	}
+
+	FcPattern *bold = XftFontMatch (g.dpy, screen, query_bold, &result);
+	FcPatternDestroy (query_bold);
+	if (bold && !(g.xft_bold = XftFontOpenPattern (g.dpy, bold)))
+		FcPatternDestroy (bold);
+	if (!g.xft_bold)
+		g.xft_bold = XftFontCopy (g.dpy, g.xft_regular);
+}
+
+static void
+x11_init (void)
+{
+	if (!(g.dpy = XkbOpenDisplay
+		(NULL, &g.xkb_base_event_code, NULL, NULL, NULL, NULL)))
+		exit_fatal ("cannot open display");
+	if (!XftDefaultHasRender (g.dpy))
+		exit_fatal ("XRender is not supported");
+
+	x11_default_error_handler = XSetErrorHandler (on_x11_error);
+
+	set_cloexec (ConnectionNumber (g.dpy));
+	g.x11_event = poller_fd_make (&g.poller, ConnectionNumber (g.dpy));
+	g.x11_event.dispatcher = on_x11_ready;
+	poller_fd_set (&g.x11_event, POLLIN);
+
+	// Whenever something causes Xlib to read its socket, it can make
+	// the I/O event above fail to trigger for whatever might have ended up
+	// in its queue.  So always use this instead of XSync:
+	g.xpending_event = poller_idle_make (&g.poller);
+	g.xpending_event.dispatcher = on_x11_pending;
+	poller_idle_set (&g.xpending_event);
+
+	x11_init_attributes ();
+	x11_init_fonts ();
+
+	int screen = DefaultScreen (g.dpy);
+	Colormap cmap = DefaultColormap (g.dpy, screen);
+	XColor default_bg =
+	{
+		.red    = x11_default_bg.red,
+		.green  = x11_default_bg.green,
+		.blue   = x11_default_bg.blue,
+	};
+	if (!XAllocColor (g.dpy, cmap, &default_bg))
+		exit_fatal ("X11 setup failed");
+
+	XSetWindowAttributes attrs =
+	{
+		.event_mask = StructureNotifyMask | ExposureMask | FocusChangeMask
+			| KeyPressMask | ButtonPressMask | ButtonReleaseMask,
+		.bit_gravity = NorthWestGravity,
+		.background_pixel = default_bg.pixel,
+	};
+
+	// Approximate the average width of a character to half of the em unit.
+	g.ui_vunit = g.xft_regular->height;
+	g.ui_hunit = g.ui_vunit / 2;
+	// Base the window's size on the regular font size.
+	// Roughly trying to match the 80x24 default dimensions of terminals.
+	g.ui_height = 24 * g.ui_vunit;
+	g.ui_width = g.ui_height * 4 / 3;
+
+	Visual *visual = DefaultVisual (g.dpy, screen);
+	g.x11_window = XCreateWindow (g.dpy, RootWindow (g.dpy, screen), 100, 100,
+		g.ui_width, g.ui_height, 0, CopyFromParent, InputOutput, visual,
+		CWEventMask | CWBackPixel | CWBitGravity, &attrs);
+	g.x11_pixmap = XCreatePixmap (g.dpy, g.x11_window, g.ui_width, g.ui_height,
+		DefaultDepth (g.dpy, screen));
+
+	x11_init_pixmap ();
+	g.xft_draw = XftDrawCreate (g.dpy, g.x11_pixmap, visual, cmap);
+	g.ui = &x11_ui;
+
+	XTextProperty prop = {};
+	char *name = PROGRAM_NAME;
+	if (!Xutf8TextListToTextProperty (g.dpy, &name, 1, XUTF8StringStyle, &prop))
+		XSetWMName (g.dpy, g.x11_window, &prop);
+	XFree (prop.value);
+
+	XMapWindow (g.dpy, g.x11_window);
+}
+
+#endif  // WITH_X11
+
 // --- Signals -----------------------------------------------------------------
 
 static int g_signal_pipe[2];            ///< A pipe used to signal... signals
@@ -4814,73 +6233,6 @@ signals_setup_handlers (void)
 // --- Initialisation, event handling ------------------------------------------
 
 static void
-app_on_tty_event (termo_key_t *event, int64_t event_ts)
-{
-	// Simple double click detection via release--press delay, only a bit
-	// complicated by the fact that we don't know what's being released
-	static termo_key_t last_event;
-	static int64_t last_event_ts;
-	static int last_button;
-
-	int y, x, button, y_last, x_last;
-	termo_mouse_event_t type, type_last;
-	if (termo_interpret_mouse (g.tk, event, &type, &button, &y, &x))
-	{
-		bool double_click = termo_interpret_mouse
-			(g.tk, &last_event, &type_last, NULL, &y_last, &x_last)
-			&& event_ts - last_event_ts < 500
-			&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
-			&& y_last == y && x_last == x && last_button == button;
-		if (!app_process_mouse (type, y, x, button, double_click))
-			beep ();
-
-		// Prevent interpreting triple clicks as two double clicks
-		if (double_click)
-			last_button = 0;
-		else if (type == TERMO_MOUSE_PRESS)
-			last_button = button;
-	}
-	else if (!app_process_termo_event (event))
-		beep ();
-
-	last_event = *event;
-	last_event_ts = event_ts;
-}
-
-static void
-app_on_tty_readable (const struct pollfd *fd, void *user_data)
-{
-	(void) user_data;
-	if (fd->revents & ~(POLLIN | POLLHUP | POLLERR))
-		print_debug ("fd %d: unexpected revents: %d", fd->fd, fd->revents);
-
-	poller_timer_reset (&g.tk_timer);
-	termo_advisereadable (g.tk);
-
-	termo_key_t event;
-	int64_t event_ts = clock_msec (CLOCK_BEST);
-	termo_result_t res;
-	while ((res = termo_getkey (g.tk, &event)) == TERMO_RES_KEY)
-		app_on_tty_event (&event, event_ts);
-
-	if (res == TERMO_RES_AGAIN)
-		poller_timer_set (&g.tk_timer, termo_get_waittime (g.tk));
-	else if (res == TERMO_RES_ERROR || res == TERMO_RES_EOF)
-		app_quit ();
-}
-
-static void
-app_on_key_timer (void *user_data)
-{
-	(void) user_data;
-
-	termo_key_t event;
-	if (termo_getkey_force (g.tk, &event) == TERMO_RES_KEY)
-		if (!app_process_termo_event (&event))
-			beep ();
-}
-
-static void
 app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 {
 	(void) user_data;
@@ -4891,11 +6243,13 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 	if (g_termination_requested && !g.quitting)
 		app_quit ();
 
+	// It would be awkward to set up SIGWINCH conditionally,
+	// so have it as a handler within UIs.
 	if (g_winch_received)
 	{
 		g_winch_received = false;
-		update_curses_terminal_size ();
-		app_invalidate ();
+		if (g.ui->winch)
+			g.ui->winch ();
 	}
 }
 
@@ -4948,15 +6302,14 @@ app_init_poller_events (void)
 	g.signal_event.dispatcher = app_on_signal_pipe_readable;
 	poller_fd_set (&g.signal_event, POLLIN);
 
-	g.tty_event = poller_fd_make (&g.poller, STDIN_FILENO);
-	g.tty_event.dispatcher = app_on_tty_readable;
-	poller_fd_set (&g.tty_event, POLLIN);
-
 	g.message_timer = poller_timer_make (&g.poller);
 	g.message_timer.dispatcher = app_on_message_timer;
 
+	// Always initialized, but only activated with the TUI.
+	g.tty_event = poller_fd_make (&g.poller, STDIN_FILENO);
+	g.tty_event.dispatcher = tui_on_tty_readable;
 	g.tk_timer = poller_timer_make (&g.poller);
-	g.tk_timer.dispatcher = app_on_key_timer;
+	g.tk_timer.dispatcher = tui_on_key_timer;
 
 	g.connect_event = poller_timer_make (&g.poller);
 	g.connect_event.dispatcher = app_on_reconnect;
@@ -4969,6 +6322,9 @@ app_init_poller_events (void)
 
 	g.refresh_event = poller_idle_make (&g.poller);
 	g.refresh_event.dispatcher = app_on_refresh;
+
+	g.flip_event = poller_idle_make (&g.poller);
+	g.flip_event.dispatcher = app_on_flip;
 }
 
 static void
@@ -4999,14 +6355,17 @@ main (int argc, char *argv[])
 	static const struct opt opts[] =
 	{
 		{ 'd', "debug", NULL, 0, "run in debug mode" },
+#ifdef WITH_X11
+		{ 'x', "x11", NULL, 0, "use X11 even when run from a terminal" },
+#endif  // WITH_X11
 		{ 'h', "help", NULL, 0, "display this help and exit" },
 		{ 'V', "version", NULL, 0, "output version information and exit" },
 		{ 0, NULL, NULL, 0, NULL }
 	};
 
-	struct opt_handler oh =
-		opt_handler_make (argc, argv, opts,
-			"[URL | PATH]...", "Terminal-based MPD client.");
+	bool requested_x11 = false;
+	struct opt_handler oh
+		= opt_handler_make (argc, argv, opts, "[URL | PATH]...", "MPD client.");
 
 	int c;
 	while ((c = opt_handler_get (&oh)) != -1)
@@ -5021,6 +6380,9 @@ main (int argc, char *argv[])
 	case 'V':
 		printf (PROGRAM_NAME " " PROGRAM_VERSION "\n");
 		exit (EXIT_SUCCESS);
+	case 'x':
+		requested_x11 = true;
+		break;
 	default:
 		print_error ("wrong options");
 		opt_handler_usage (&oh, stderr);
@@ -5040,7 +6402,13 @@ main (int argc, char *argv[])
 	app_load_configuration ();
 	signals_setup_handlers ();
 	app_init_poller_events ();
-	app_init_terminal ();
+
+#ifdef WITH_X11
+	if (requested_x11 || (!isatty (STDIN_FILENO) && getenv ("DISPLAY")))
+		x11_init ();
+	else
+#endif  // WITH_X11
+		tui_init ();
 
 	g_normal_keys = app_init_bindings ("normal",
 		g_normal_defaults, N_ELEMENTS (g_normal_defaults), &g_normal_keys_len);
@@ -5069,7 +6437,7 @@ main (int argc, char *argv[])
 	while (g.polling)
 		poller_run (&g.poller);
 
-	endwin ();
+	g.ui->destroy ();
 	g_log_message_real = log_message_stdio;
 	app_free_context ();
 	return 0;

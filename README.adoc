@@ -1,24 +1,27 @@
 nncmpp
 ======
 
-'nncmpp' is yet another MPD client.  It is in effect a simplified TUI version
-of Sonata.  I had already written a lot of the required code before, so I had
-the perfect opportunity to get rid of the unmaintained Python application and
-make the first TUI client that doesn't feel awkward to use.
+'nncmpp' is yet another MPD client.  Its specialty is running equally well in
+the terminal, or as an X11 client--it will provide the same keyboard- and
+mouse-friendly interface.
+
+This project began its life as a simplified TUI version of Sonata.  I had
+already written a lot of the required code before, so I had the perfect
+opportunity to get rid of the unmaintained Python application, and to make
+the first TUI client that doesn't feel awkward to use.
 
 If it's not obvious enough, the name is a pun on all those ridiculous client
 names, and should be pronounced as "nincompoop".
 
 Features
 --------
-Most stuff is there.  Enough for me to use the program exclusively.  Among other
-things, it can display and change PulseAudio volume directly to cover the use
-case of remote control, it has a fast spectrum visualiser, and both
-the appearance and key bindings can be customized.
+Most stuff is there.  I've been using the program exclusively for many years.
+Among other things, it can display and change PulseAudio volume directly
+to cover the use case of remote control, it has a fast spectrum visualiser,
+and both its appearance and key bindings can be customized.
 
-Note that since I only use the filesystem browsing mode, that's also the only
-thing I care to implement for the time being.  Similarly, the search feature is
-known to be clumsy.
+Note that currently only the filesystem browsing mode is implemented,
+and the search feature is known to be clumsy.
 
 image::nncmpp.png[align="center"]
 
@@ -38,6 +41,7 @@ Build dependencies: CMake, pkg-config, asciidoctor,
                     liberty (included), termo (included) +
 Runtime dependencies: ncursesw, libunistring, cURL,
                       fftw3 (optional), libpulse (optional)
+Optional X11 dependencies: x11, xkbcommon, xft
 
  $ git clone --recursive https://git.janouch.name/p/nncmpp.git
  $ mkdir nncmpp/build
@@ -54,15 +58,18 @@ Or you can try telling CMake to make a package for you.  For Debian it is:
  $ cpack -G DEB
  # dpkg -i nncmpp-*.deb
 
-Terminal caveats
-----------------
-This application aspires to be as close to a GUI as possible.  It expects you
-to use the mouse (though it's not required).  Terminals are, however, somewhat
-tricky to get consistent results on, so be aware of the following:
+User interface caveats
+----------------------
+The ncurses interface aspires to be as close to a GUI as possible.  Don't shy
+away from using your mouse (though keyboard is also fine).  Terminals are,
+however, tricky to get consistent results on, so be aware of the following:
 
  - use a UTF-8 locale to get finer resolution progress bars and scrollbars
  - Xterm needs `XTerm*metaSendsEscape: true` for the default bindings to work
  - urxvt's 'vtwheel' plugin sabotages scrolling
+
+The X11 graphical interface is a second-class citizen, so some limitations of
+terminals carry over, such as the plain default theme.
 
 Contributing and Support
 ------------------------

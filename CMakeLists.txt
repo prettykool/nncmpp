@@ -58,11 +58,20 @@ if (WITH_PULSE)
 	list (APPEND extra_libraries ${libpulse_LIBRARIES})
 endif ()
 
+pkg_check_modules (x11 x11 xkbcommon xrender xft fontconfig)
+option (WITH_X11 "Use FFTW to enable spectrum visualisation" ${x11_FOUND})
+if (WITH_X11)
+	if (NOT x11_FOUND)
+		message (FATAL_ERROR "Some X11 libraries were not found")
+	endif ()
+	list (APPEND extra_libraries ${x11_LIBRARIES})
+endif ()
+
 include_directories (${Unistring_INCLUDE_DIRS}
 	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS} ${curl_INCLUDE_DIRS}
-	${fftw_INCLUDE_DIRS} ${libpulse_INCLUDE_DIRS})
+	${fftw_INCLUDE_DIRS} ${libpulse_INCLUDE_DIRS} ${x11_INCLUDE_DIRS})
 link_directories (${curl_LIBRARY_DIRS}
-	${fftw_LIBRARY_DIRS} ${libpulse_LIBRARY_DIRS})
+	${fftw_LIBRARY_DIRS} ${libpulse_LIBRARY_DIRS} ${x11_LIBRARY_DIRS})
 
 # Configuration
 if ("${CMAKE_SYSTEM_NAME}" MATCHES "BSD")
@@ -144,7 +153,7 @@ foreach (page ${project_MAN_PAGES})
 endforeach ()
 
 # CPack
-set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "MPD client")
+set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Terminal/X11 MPD client")
 set (CPACK_PACKAGE_VENDOR "Premysl Eric Janouch")
 set (CPACK_PACKAGE_CONTACT "Přemysl Eric Janouch <p@janouch.name>")
 set (CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")

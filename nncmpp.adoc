@@ -6,7 +6,7 @@ nncmpp(1)
 
 Name
 ----
-nncmpp - terminal-based MPD client
+nncmpp - MPD client
 
 Synopsis
 --------
@@ -14,7 +14,7 @@ Synopsis
 
 Description
 -----------
-*nncmpp* is a terminal-based GUI-like MPD client.  On start up it will welcome
+*nncmpp* is a hybrid terminal/X11 MPD client.  On start up it will welcome
 you with an overview of all key bindings and the actions they're assigned to.
 Individual tabs can be switched to either using the mouse or by pressing *M-1*
 through *M-9*, corresponding to the order they appear in.
@@ -28,6 +28,10 @@ Options
 *-d*, *--debug*::
 	Adds a "Debug" tab showing all MPD communication and other information
 	that help debug various issues.
+
+*-x*, *--x11*::
+	Use an X11 interface even when run from a terminal.
+	Note that the application may be built with this feature disabled.
 
 *-h*, *--help*::
 	Display a help message and exit.
@@ -48,6 +52,7 @@ settings = {
   address    = "~/.mpd/mpd.socket"
   password   = "<your password>"
   pulseaudio = on
+  x11_font   = "sans\\-serif-11"
 }
 colors = {
   normal      = ""
@@ -69,9 +74,9 @@ streams = {
 }
 ....
 
-Terminal attributes are accepted in a format similar to that of *git-config*(1),
-only named colours aren't supported.  The distribution contains example colour
-schemes in the _contrib_ directory.
+Terminal attributes also apply to the GUI, and are accepted in a format similar
+to that of *git-config*(1), only named colours aren't supported.
+The distribution contains example colour schemes in the _contrib_ directory.
 
 // TODO: it seems like liberty should contain an includable snippet about
 //   the format, which could form a part of nncmpp.conf(5).
