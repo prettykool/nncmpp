@@ -1560,6 +1560,7 @@ app_init_terminal (void)
 	for (int a = 0; a < ATTRIBUTE_COUNT; a++)
 	{
 		// ...thus we can reset back to defaults even after initializing some
+		// FIXME: that's a lie now, MULTISELECT requires a colour
 		if (g.attrs[a].fg >= COLORS || g.attrs[a].fg < -1
 		 || g.attrs[a].bg >= COLORS || g.attrs[a].bg < -1)
 		{
