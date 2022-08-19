@@ -4280,6 +4280,7 @@ pulse_update (void)
 	// The read permission is sufficient for this command
 	mpd_client_send_command (c, "outputs", NULL);
 	mpd_client_add_task (c, mpd_on_outputs_response, NULL);
+	mpd_client_idle (c, 0);
 }
 
 static void
