@@ -37,7 +37,7 @@ The rest of this README will concern itself with externalities.
 
 Building
 --------
-Build dependencies: CMake, pkg-config, asciidoctor,
+Build dependencies: CMake, pkg-config, asciidoctor or asciidoc,
                     liberty (included), termo (included) +
 Runtime dependencies: ncursesw, libunistring, cURL +
 Optional runtime dependencies: fftw3, libpulse, x11, xft
