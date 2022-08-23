@@ -5957,6 +5957,7 @@ on_x11_input_event (XEvent *ev)
 		app_process_mouse (TERMO_MOUSE_RELEASE, x, y, button, double_click);
 
 	// Prevent interpreting triple clicks as two double clicks.
+	// FIXME: This doesn't work: we skip ButtonPress, but use ButtonRelease.
 	last_button_event = (XEvent) {};
 	if (!double_click)
 		last_button_event = *ev;
