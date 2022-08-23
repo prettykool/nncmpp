@@ -5386,17 +5386,27 @@ x11_render_label (struct widget *self)
 static struct widget *
 x11_make_label (chtype attrs, const char *label)
 {
-	size_t len = strlen (label);
-	struct widget *w = xcalloc (1, sizeof *w + len + 1);
+	// Xft renders combining marks by themselves, NFC improves it a bit.
+	size_t label_len = strlen (label) + 1, normalized_len = 0;
+	uint8_t *normalized = u8_normalize (UNINORM_NFC,
+		(const uint8_t *) label, label_len, NULL, &normalized_len);
+	if (!normalized)
+	{
+		normalized = memcpy (xmalloc (label_len), label, label_len);
+		normalized_len = label_len;
+	}
+
+	struct widget *w = xcalloc (1, sizeof *w + normalized_len);
 	w->on_render = x11_render_label;
 	w->attrs = attrs;
-	memcpy (w + 1, label, len);
+	memcpy (w + 1, normalized, normalized_len);
 
 	XftFont *font = x11_font (w);
 	XGlyphInfo extents = {};
-	XftTextExtentsUtf8 (g.dpy, font, (const FcChar8 *) label, len, &extents);
+	XftTextExtentsUtf8 (g.dpy, font, normalized, normalized_len - 1, &extents);
 	w->width = extents.xOff;
 	w->height = font->height;
+	free (normalized);
 	return w;
 }
 
