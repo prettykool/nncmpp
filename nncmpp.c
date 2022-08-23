@@ -861,6 +861,10 @@ spectrum_free (struct spectrum *s)
 	fftw_free (s->windowed);
 	free (s->data);
 	free (s->window);
+#if 0
+	// We don't particularly want to discard wisdom.
+	fftwf_cleanup ();
+#endif
 
 	free (s->rendered);
 	free (s->spectrum);
@@ -5751,6 +5755,9 @@ x11_destroy (void)
 
 	poller_fd_reset (&g.x11_event);
 	XCloseDisplay (g.dpy);
+
+	// Xft hooks called in XCloseDisplay() don't clean up everything.
+	FcFini ();
 }
 
 static struct ui x11_ui =
