@@ -113,7 +113,6 @@ enum
 #include <X11/keysym.h>
 #include <X11/XKBlib.h>
 #include <X11/Xft/Xft.h>
-#include <xkbcommon/xkbcommon.h>
 #endif  // WITH_X11
 
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
@@ -1345,6 +1344,8 @@ static struct app_context
 	bool pulse_control_requested;       ///< PulseAudio control desired by user
 
 #ifdef WITH_X11
+	XIM x11_im;                         ///< Input method
+	XIC x11_ic;                         ///< Input method context
 	Display *dpy;                       ///< X display handle
 	struct poller_fd x11_event;         ///< X11 events on wire
 	struct poller_idle xpending_event;  ///< X11 events possibly in I/O queues
@@ -5739,6 +5740,8 @@ x11_flip (void)
 static void
 x11_destroy (void)
 {
+	XDestroyIC (g.x11_ic);
+	XCloseIM (g.x11_im);
 	XDestroyWindow (g.dpy, g.x11_window);
 	XRenderFreePicture (g.dpy, g.x11_pixmap_picture);
 	XFreePixmap (g.dpy, g.x11_pixmap);
@@ -5843,12 +5846,15 @@ x11_convert_keysym (KeySym keysym)
 static void
 on_x11_keypress (XEvent *e)
 {
+	// A kibibyte long buffer will have to suffice for anyone.
 	XKeyEvent *ev = &e->xkey;
-	unsigned unconsumed_mods = 0;
+	char buf[1 << 10] = {}, *p = buf;
 	KeySym keysym = None;
-	if (!XkbLookupKeySym (g.dpy,
-			(KeyCode) ev->keycode, ev->state, &unconsumed_mods, &keysym))
-		return;
+	Status status = 0;
+	int len = Xutf8LookupString
+		(g.x11_ic, ev, buf, sizeof buf, &keysym, &status);
+	if (status == XBufferOverflow)
+		print_warning ("input method overflow");
 
 	termo_key_t key = {};
 	if (ev->state & ShiftMask)
@@ -5862,19 +5868,37 @@ on_x11_keypress (XEvent *e)
 	{
 		key.type = TERMO_TYPE_FUNCTION;
 		key.code.number = 1 + keysym - XK_F1;
+		app_process_termo_event (&key);
 	}
 	else if ((key.code.sym = x11_convert_keysym (keysym)) != TERMO_SYM_UNKNOWN)
-		key.type = TERMO_TYPE_KEYSYM;
-	else if ((key.code.codepoint = xkb_keysym_to_utf32 (keysym)))
 	{
-		// Not filling in UTF-8, but xkb_keysym_to_utf8() exists.
+		key.type = TERMO_TYPE_KEYSYM;
+		app_process_termo_event (&key);
+	}
+	else if (len)
+	{
 		key.type = TERMO_TYPE_KEY;
 		key.modifiers &= ~TERMO_KEYMOD_SHIFT;
-	}
-	else
-		return;
 
-	app_process_termo_event (&key);
+		int32_t cp = 0;
+		struct utf8_iter iter = { .s = buf, .len = len };
+		size_t cp_len = 0;
+		while ((cp = utf8_iter_next (&iter, &cp_len)) >= 0)
+		{
+			termo_key_t k = key;
+			memcpy (k.multibyte, p, MIN (cp_len, sizeof k.multibyte - 1));
+			p += cp_len;
+
+			// This is unfortunate, but probably in the right place.
+			if (cp >= 32)
+				k.code.codepoint = cp;
+			else if (ev->state & ShiftMask)
+				k.code.codepoint = cp + 64;
+			else
+				k.code.codepoint = cp + 96;
+			app_process_termo_event (&k);
+		}
+	}
 }
 
 static void
@@ -5975,6 +5999,9 @@ on_x11_pending (void *user_data)
 	{
 		if (XNextEvent (g.dpy, &ev.core))
 			exit_fatal ("XNextEvent returned non-zero");
+		if (XFilterEvent (&ev.core, None))
+			continue;
+
 		on_x11_event (&ev.core);
 	}
 
@@ -6093,11 +6120,18 @@ x11_init_fonts (void)
 static void
 x11_init (void)
 {
+	// https://tedyin.com/posts/a-brief-intro-to-linux-input-method-framework/
+	if (!XSupportsLocale ())
+		print_warning ("locale not supported by Xlib");
+	XSetLocaleModifiers ("");
+
 	if (!(g.dpy = XkbOpenDisplay
 		(NULL, &g.xkb_base_event_code, NULL, NULL, NULL, NULL)))
 		exit_fatal ("cannot open display");
 	if (!XftDefaultHasRender (g.dpy))
 		exit_fatal ("XRender is not supported");
+	if (!(g.x11_im = XOpenIM (g.dpy, NULL, NULL, NULL)))
+		exit_fatal ("failed to open an input method");
 
 	x11_default_error_handler = XSetErrorHandler (on_x11_error);
 
@@ -6143,22 +6177,45 @@ x11_init (void)
 	g.ui_height = 24 * g.ui_vunit;
 	g.ui_width = g.ui_height * 4 / 3;
 
+	long im_event_mask = 0;
+	if (!XGetIMValues (g.x11_im, XNFilterEvents, &im_event_mask, NULL))
+		attrs.event_mask |= im_event_mask;
+
 	Visual *visual = DefaultVisual (g.dpy, screen);
 	g.x11_window = XCreateWindow (g.dpy, RootWindow (g.dpy, screen), 100, 100,
 		g.ui_width, g.ui_height, 0, CopyFromParent, InputOutput, visual,
 		CWEventMask | CWBackPixel | CWBitGravity, &attrs);
-	g.x11_pixmap = XCreatePixmap (g.dpy, g.x11_window, g.ui_width, g.ui_height,
-		DefaultDepth (g.dpy, screen));
-
-	x11_init_pixmap ();
-	g.xft_draw = XftDrawCreate (g.dpy, g.x11_pixmap, visual, cmap);
-	g.ui = &x11_ui;
 
 	XTextProperty prop = {};
 	char *name = PROGRAM_NAME;
 	if (!Xutf8TextListToTextProperty (g.dpy, &name, 1, XUTF8StringStyle, &prop))
 		XSetWMName (g.dpy, g.x11_window, &prop);
 	XFree (prop.value);
+
+	// TODO: It is possible to do, e.g., on-the-spot.
+	XIMStyle im_style = XIMPreeditNothing | XIMStatusNothing;
+	XIMStyles *im_styles = NULL;
+	bool im_style_found = false;
+	if (!XGetIMValues (g.x11_im, XNQueryInputStyle, &im_styles, NULL)
+	 && im_styles)
+	{
+		for (unsigned i = 0; i < im_styles->count_styles; i++)
+			im_style_found |= im_styles->supported_styles[i] == im_style;
+		XFree (im_styles);
+	}
+	if (!im_style_found)
+		print_warning ("failed to find the desired input method style");
+	if (!(g.x11_ic = XCreateIC (g.x11_im,
+			XNInputStyle, im_style,
+			XNClientWindow, g.x11_window,
+			NULL)))
+		exit_fatal ("failed to open an input context");
+
+	XSetICFocus (g.x11_ic);
+
+	x11_init_pixmap ();
+	g.xft_draw = XftDrawCreate (g.dpy, g.x11_pixmap, visual, cmap);
+	g.ui = &x11_ui;
 
 	XMapWindow (g.dpy, g.x11_window);
 }

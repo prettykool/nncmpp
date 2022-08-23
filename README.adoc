@@ -40,8 +40,8 @@ Building
 Build dependencies: CMake, pkg-config, asciidoctor,
                     liberty (included), termo (included) +
 Runtime dependencies: ncursesw, libunistring, cURL,
-                      fftw3 (optional), libpulse (optional)
-Optional X11 dependencies: x11, xkbcommon, xft
+                      fftw3 (optional), libpulse (optional) +
+Optional X11 dependencies: x11, xft
 
  $ git clone --recursive https://git.janouch.name/p/nncmpp.git
  $ mkdir nncmpp/build

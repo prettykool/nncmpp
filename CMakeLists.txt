@@ -58,7 +58,7 @@ if (WITH_PULSE)
 	list (APPEND extra_libraries ${libpulse_LIBRARIES})
 endif ()
 
-pkg_check_modules (x11 x11 xkbcommon xrender xft fontconfig)
+pkg_check_modules (x11 x11 xrender xft fontconfig)
 option (WITH_X11 "Use FFTW to enable spectrum visualisation" ${x11_FOUND})
 if (WITH_X11)
 	if (NOT x11_FOUND)
