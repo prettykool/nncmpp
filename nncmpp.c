@@ -2770,6 +2770,13 @@ app_process_left_mouse_click (struct widget *w, int x, int y, int modifiers)
 		 || row_index >= (int) tab->item_count - tab->item_top)
 			return false;
 
+		if (!(modifiers & TERMO_KEYMOD_SHIFT))
+			tab->item_mark = -1;
+		else if (!tab->can_multiselect || tab->item_selected < 0)
+			return false;
+		else if (tab->item_mark < 0)
+			tab->item_mark = tab->item_selected;
+
 		// TODO: Probably will need to fix up item->top
 		//   for partially visible items in X11.
 		tab->item_selected = row_index + tab->item_top;
