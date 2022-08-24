@@ -1144,7 +1144,7 @@ pulse_volume_status (struct pulse *self, struct str *s)
 enum
 {
 	WIDGET_NONE = 0, WIDGET_BUTTON, WIDGET_GAUGE, WIDGET_TAB, WIDGET_SPECTRUM,
-	WIDGET_LIST, WIDGET_SCROLLBAR,
+	WIDGET_LIST, WIDGET_SCROLLBAR, WIDGET_MESSAGE,
 };
 
 struct widget;
@@ -2187,12 +2187,19 @@ app_layout_mpd_status (void)
 static void
 app_layout_statusbar (void)
 {
-
+	struct layout l = {};
 	if (g.message)
-		app_layout_text (g.message, APP_ATTR (HIGHLIGHT));
+	{
+		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1))
+			->id = WIDGET_MESSAGE;
+		app_push_fill (&l, g.ui->label (APP_ATTR (HIGHLIGHT), g.message))
+			->id = WIDGET_MESSAGE;
+		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1))
+			->id = WIDGET_MESSAGE;
+		app_flush_layout (&l);
+	}
 	else if (g.editor.line)
 	{
-		struct layout l = {};
 		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1));
 		app_push (&l, g.ui->editor (APP_ATTR (HIGHLIGHT)));
 		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1));
@@ -2752,7 +2759,12 @@ app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
 		tab->item_top = (float) y / w->height
 			* (int) tab->item_count - visible_items / 2;
 		app_invalidate ();
+		break;
 	}
+	case WIDGET_MESSAGE:
+		cstr_set (&g.message, NULL);
+		poller_timer_reset (&g.message_timer);
+		app_invalidate ();
 	}
 	return true;
 }
@@ -6358,8 +6370,8 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 
 	// Show it to the user, then maybe log it elsewhere as well.
 	cstr_set (&g.message, xstrdup (message.str));
-	app_invalidate ();
 	poller_timer_set (&g.message_timer, 5000);
+	app_invalidate ();
 
 	if (g_verbose_mode && (g.ui != &tui_ui || !isatty (STDERR_FILENO)))
 		fprintf (stderr, "%s\n", message.str);
