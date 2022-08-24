@@ -6307,6 +6307,8 @@ signals_setup_handlers (void)
 
 // --- Initialisation, event handling ------------------------------------------
 
+static bool g_verbose_mode = false;
+
 static void
 app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 {
@@ -6352,19 +6354,16 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	str_append (&message, quote);
 	str_append_vprintf (&message, fmt, ap);
 
-	// If the standard error output isn't redirected, try our best at showing
-	// the message to the user
-	if (!isatty (STDERR_FILENO))
+	// Show it to the user, then maybe log it elsewhere as well.
+	cstr_set (&g.message, xstrdup (message.str));
+	app_invalidate ();
+	poller_timer_set (&g.message_timer, 5000);
+
+	if (g_verbose_mode && (g.ui != &tui_ui || !isatty (STDERR_FILENO)))
 		fprintf (stderr, "%s\n", message.str);
-	else if (g_debug_tab.active)
+	if (g_debug_tab.active)
 		debug_tab_push (str_steal (&message),
 			user_data == NULL ? 0 : g.attrs[(intptr_t) user_data].attrs);
-	else
-	{
-		cstr_set (&g.message, xstrdup (message.str));
-		app_invalidate ();
-		poller_timer_set (&g.message_timer, 5000);
-	}
 	str_free (&message);
 
 	in_processing = false;
@@ -6434,6 +6433,7 @@ main (int argc, char *argv[])
 		{ 'x', "x11", NULL, 0, "use X11 even when run from a terminal" },
 #endif  // WITH_X11
 		{ 'h', "help", NULL, 0, "display this help and exit" },
+		{ 'v', "verbose", NULL, 0, "log messages on standard error" },
 		{ 'V', "version", NULL, 0, "output version information and exit" },
 		{ 0, NULL, NULL, 0, NULL }
 	};
@@ -6449,15 +6449,18 @@ main (int argc, char *argv[])
 	case 'd':
 		g_debug_mode = true;
 		break;
+	case 'x':
+		requested_x11 = true;
+		break;
+	case 'v':
+		g_verbose_mode = true;
+		break;
 	case 'h':
 		opt_handler_usage (&oh, stdout);
 		exit (EXIT_SUCCESS);
 	case 'V':
 		printf (PROGRAM_NAME " " PROGRAM_VERSION "\n");
 		exit (EXIT_SUCCESS);
-	case 'x':
-		requested_x11 = true;
-		break;
 	default:
 		print_error ("wrong options");
 		opt_handler_usage (&oh, stderr);
