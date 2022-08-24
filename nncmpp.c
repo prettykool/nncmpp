@@ -4051,8 +4051,8 @@ help_tab_on_action (enum action action)
 	if (action == ACTION_NONE || action == ACTION_CHOOSE /* avoid recursion */)
 		return false;
 
-	// XXX: We can't propagate failure, which produces beeps in the TUI, but we
-	// don't want to let our caller show a bad "can't do that" message either.
+	// XXX: We can't propagate failure to ring the terminal/X11 bell, but we
+	//   don't want to let our caller show a bad "can't do that" message either.
 	return app_process_action (action), true;
 }
 
@@ -5917,7 +5917,7 @@ x11_convert_keysym (KeySym keysym)
 	return TERMO_SYM_UNKNOWN;
 }
 
-static void
+static bool
 on_x11_keypress (XEvent *e)
 {
 	// A kibibyte long buffer will have to suffice for anyone.
@@ -5942,14 +5942,16 @@ on_x11_keypress (XEvent *e)
 	{
 		key.type = TERMO_TYPE_FUNCTION;
 		key.code.number = 1 + keysym - XK_F1;
-		app_process_termo_event (&key);
+		return app_process_termo_event (&key);
 	}
-	else if ((key.code.sym = x11_convert_keysym (keysym)) != TERMO_SYM_UNKNOWN)
+	if ((key.code.sym = x11_convert_keysym (keysym)) != TERMO_SYM_UNKNOWN)
 	{
 		key.type = TERMO_TYPE_KEYSYM;
-		app_process_termo_event (&key);
+		return app_process_termo_event (&key);
 	}
-	else if (len)
+
+	bool result = true;
+	if (len)
 	{
 		key.type = TERMO_TYPE_KEY;
 		key.modifiers &= ~TERMO_KEYMOD_SHIFT;
@@ -5970,9 +5972,11 @@ on_x11_keypress (XEvent *e)
 				k.code.codepoint = cp + 64;
 			else
 				k.code.codepoint = cp + 96;
-			app_process_termo_event (&k);
+			if (!app_process_termo_event (&k))
+				result = false;
 		}
 	}
+	return result;
 }
 
 static void
@@ -5988,22 +5992,20 @@ x11_init_pixmap (void)
 		= XRenderCreatePicture (g.dpy, g.x11_pixmap, format, 0, NULL);
 }
 
-static void
+static bool
 on_x11_input_event (XEvent *ev)
 {
 	static XEvent last_button_event;
 	if (ev->type == KeyPress)
 	{
 		last_button_event = (XEvent) {};
-		on_x11_keypress (ev);
-		return;
+		return on_x11_keypress (ev);
 	}
 	if (ev->type == MotionNotify)
 	{
 		// We only select for Button1MotionMask, so this works out.
 		int x = ev->xmotion.x, y = ev->xmotion.y;
-		app_process_mouse (TERMO_MOUSE_DRAG, x, y, 1, false);
-		return;
+		return app_process_mouse (TERMO_MOUSE_DRAG, x, y, 1, false);
 	}
 
 	// See tui_on_tty_event().  Just here we know the button on button release.
@@ -6015,16 +6017,19 @@ on_x11_input_event (XEvent *ev)
 		&& abs (last_button_event.xbutton.y - y) < 5
 		&& last_button_event.xbutton.button == button;
 
-	if (ev->type == ButtonPress)
-		app_process_mouse (TERMO_MOUSE_PRESS, x, y, button, double_click);
-	if (ev->type == ButtonRelease)
-		app_process_mouse (TERMO_MOUSE_RELEASE, x, y, button, double_click);
-
 	// Prevent interpreting triple clicks as two double clicks.
 	// FIXME: This doesn't work: we skip ButtonPress, but use ButtonRelease.
 	last_button_event = (XEvent) {};
 	if (!double_click)
 		last_button_event = *ev;
+
+	if (ev->type == ButtonPress)
+		return app_process_mouse
+			(TERMO_MOUSE_PRESS, x, y, button, double_click);
+	if (ev->type == ButtonRelease)
+		return app_process_mouse
+			(TERMO_MOUSE_RELEASE, x, y, button, double_click);
+	return false;
 }
 
 static void
@@ -6036,6 +6041,23 @@ on_x11_event (XEvent *ev)
 	case Expose:
 		if (!ev->xexpose.count)
 			poller_idle_set (&g.flip_event);
+		break;
+	case ConfigureNotify:
+		if (g.ui_width == ev->xconfigure.width
+		 && g.ui_height == ev->xconfigure.height)
+			break;
+
+		g.ui_width = ev->xconfigure.width;
+		g.ui_height = ev->xconfigure.height;
+
+		XRenderFreePicture (g.dpy, g.x11_pixmap_picture);
+		XFreePixmap (g.dpy, g.x11_pixmap);
+		x11_init_pixmap ();
+		XftDrawChange (g.xft_draw, g.x11_pixmap);
+		app_invalidate ();
+		break;
+	case UnmapNotify:
+		app_quit ();
 		break;
 	case FocusIn:
 		key.type = TERMO_TYPE_FOCUS;
@@ -6051,24 +6073,8 @@ on_x11_event (XEvent *ev)
 	case ButtonPress:
 	case ButtonRelease:
 	case MotionNotify:
-		on_x11_input_event (ev);
-		break;
-	case UnmapNotify:
-		app_quit ();
-		break;
-	case ConfigureNotify:
-		if (g.ui_width == ev->xconfigure.width
-		 && g.ui_height == ev->xconfigure.height)
-			break;
-
-		g.ui_width = ev->xconfigure.width;
-		g.ui_height = ev->xconfigure.height;
-
-		XRenderFreePicture (g.dpy, g.x11_pixmap_picture);
-		XFreePixmap (g.dpy, g.x11_pixmap);
-		x11_init_pixmap ();
-		XftDrawChange (g.xft_draw, g.x11_pixmap);
-		app_invalidate ();
+		if (!on_x11_input_event (ev))
+			XkbBell (g.dpy, ev->xany.window, 0, None);
 	}
 }
 
