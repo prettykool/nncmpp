@@ -2728,8 +2728,11 @@ app_editor_process_action (enum action action)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+// Carefully chosen to limit the possibility of ever hitting termo keymods.
+enum { APP_KEYMOD_DOUBLE_CLICK = 1 << 15 };
+
 static bool
-app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
+app_process_left_mouse_click (struct widget *w, int x, int y, int modifiers)
 {
 	switch (w->id)
 	{
@@ -2772,7 +2775,7 @@ app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
 		tab->item_selected = row_index + tab->item_top;
 		app_invalidate ();
 
-		if (double_click)
+		if (modifiers & APP_KEYMOD_DOUBLE_CLICK)
 			app_process_action (ACTION_CHOOSE);
 		break;
 	}
@@ -2793,7 +2796,7 @@ app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
 
 static bool
 app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
-	bool double_click)
+	int modifiers)
 {
 	// XXX: Terminals don't let us know which button has been released,
 	//   so we can't press buttons at that point.  We'd need a special "click"
@@ -2817,7 +2820,7 @@ app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
 
 		x -= target->x;
 		y -= target->y;
-		return app_process_left_mouse_click (target, x, y, double_click);
+		return app_process_left_mouse_click (target, x, y, modifiers);
 	}
 
 	if (g.editor.line)
@@ -2840,7 +2843,7 @@ app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
 	{
 	case 1:
 		g.ui_dragging = target->id;
-		return app_process_left_mouse_click (target, x, y, double_click);
+		return app_process_left_mouse_click (target, x, y, modifiers);
 	case 4:
 		if (target->id == WIDGET_LIST)
 			return app_process_action (ACTION_SCROLL_UP);
@@ -5243,23 +5246,25 @@ tui_on_tty_event (termo_key_t *event, int64_t event_ts)
 	static int64_t last_event_ts;
 	static int last_button;
 
-	int y, x, button, y_last, x_last;
+	int y, x, button, y_last, x_last, modifiers = 0;
 	termo_mouse_event_t type, type_last;
 	if (termo_interpret_mouse (g.tk, event, &type, &button, &y, &x))
 	{
-		bool double_click = termo_interpret_mouse
+		if (termo_interpret_mouse
 			(g.tk, &last_event, &type_last, NULL, &y_last, &x_last)
-			&& event_ts - last_event_ts < 500
-			&& type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
-			&& y_last == y && x_last == x && last_button == button;
-		if (!app_process_mouse (type, x, y, button, double_click))
-			beep ();
-
-		// Prevent interpreting triple clicks as two double clicks
-		if (double_click)
+		 && event_ts - last_event_ts < 500
+		 && type_last == TERMO_MOUSE_RELEASE && type == TERMO_MOUSE_PRESS
+		 && y_last == y && x_last == x && last_button == button)
+		{
+			modifiers |= APP_KEYMOD_DOUBLE_CLICK;
+			// Prevent interpreting triple clicks as two double clicks.
 			last_button = 0;
+		}
 		else if (type == TERMO_MOUSE_PRESS)
 			last_button = button;
+
+		if (!app_process_mouse (type, x, y, button, modifiers))
+			beep ();
 	}
 	else if (!app_process_termo_event (event))
 		beep ();
@@ -6001,43 +6006,55 @@ x11_init_pixmap (void)
 		= XRenderCreatePicture (g.dpy, g.x11_pixmap, format, 0, NULL);
 }
 
+static int
+x11_state_to_modifiers (unsigned int state)
+{
+	int modifiers = 0;
+	if (state & ShiftMask)    modifiers |= TERMO_KEYMOD_SHIFT;
+	if (state & ControlMask)  modifiers |= TERMO_KEYMOD_CTRL;
+	if (state & Mod1Mask)     modifiers |= TERMO_KEYMOD_ALT;
+	return modifiers;
+}
+
 static bool
 on_x11_input_event (XEvent *ev)
 {
-	static XEvent last_button_event;
+	static XEvent last_press_event;
 	if (ev->type == KeyPress)
 	{
-		last_button_event = (XEvent) {};
+		last_press_event = (XEvent) {};
 		return on_x11_keypress (ev);
 	}
 	if (ev->type == MotionNotify)
 	{
-		// We only select for Button1MotionMask, so this works out.
-		int x = ev->xmotion.x, y = ev->xmotion.y;
-		return app_process_mouse (TERMO_MOUSE_DRAG, x, y, 1, false);
+		return app_process_mouse (TERMO_MOUSE_DRAG,
+			ev->xmotion.x, ev->xmotion.y, 1 /* Button1MotionMask */,
+			x11_state_to_modifiers (ev->xmotion.state));
 	}
 
-	// See tui_on_tty_event().  Just here we know the button on button release.
+	// This is nearly the same as tui_on_tty_event().
 	int x = ev->xbutton.x, y = ev->xbutton.y;
 	unsigned int button = ev->xbutton.button;
-	bool double_click = ev->xbutton.time - last_button_event.xbutton.time < 500
-		&& last_button_event.type == ButtonRelease && ev->type == ButtonPress
-		&& abs (last_button_event.xbutton.x - x) < 5
-		&& abs (last_button_event.xbutton.y - y) < 5
-		&& last_button_event.xbutton.button == button;
-
-	// Prevent interpreting triple clicks as two double clicks.
-	// FIXME: This doesn't work: we skip ButtonPress, but use ButtonRelease.
-	last_button_event = (XEvent) {};
-	if (!double_click)
-		last_button_event = *ev;
+	int modifiers = x11_state_to_modifiers (ev->xbutton.state);
+	if (ev->type == ButtonPress
+	 && ev->xbutton.time - last_press_event.xbutton.time < 500
+	 && abs (last_press_event.xbutton.x - x) < 5
+	 && abs (last_press_event.xbutton.y - y) < 5
+	 && last_press_event.xbutton.button == button)
+	{
+		modifiers |= APP_KEYMOD_DOUBLE_CLICK;
+		// Prevent interpreting triple clicks as two double clicks.
+		last_press_event = (XEvent) {};
+	}
+	else if (ev->type == ButtonPress)
+		last_press_event = *ev;
 
 	if (ev->type == ButtonPress)
 		return app_process_mouse
-			(TERMO_MOUSE_PRESS, x, y, button, double_click);
+			(TERMO_MOUSE_PRESS, x, y, button, modifiers);
 	if (ev->type == ButtonRelease)
 		return app_process_mouse
-			(TERMO_MOUSE_RELEASE, x, y, button, double_click);
+			(TERMO_MOUSE_RELEASE, x, y, button, modifiers);
 	return false;
 }
 
