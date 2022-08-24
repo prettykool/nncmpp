@@ -1357,6 +1357,7 @@ static struct app_context
 	int xkb_base_event_code;            ///< Xkb base event code
 	Window x11_window;                  ///< Application window
 	Pixmap x11_pixmap;                  ///< Off-screen bitmap
+	Region x11_clip;                    ///< Invalidated region
 	Picture x11_pixmap_picture;         ///< XRender wrap for x11_pixmap
 	XftDraw *xft_draw;                  ///< Xft rendering context
 	XftFont *xft_regular;               ///< Regular font
@@ -5673,19 +5674,27 @@ x11_render_spectrum (struct widget *self)
 	x11_render_padding (self);
 
 #ifdef WITH_FFTW
-	int step = self->width / g.spectrum.bars;
+	XRectangle rectangles[g.spectrum.bars];
+	int step = self->width / N_ELEMENTS (rectangles);
 	for (int i = 0; i < g.spectrum.bars; i++)
 	{
-		float value = g.spectrum.spectrum[i];
-		int height = round ((self->height - 2) * value);
-		XRenderFillRectangle (g.dpy, PictOpSrc,
-			g.x11_pixmap_picture, x11_fg (self),
+		int height = round ((self->height - 2) * g.spectrum.spectrum[i]);
+		rectangles[i] = (XRectangle)
+		{
 			self->x + i * step,
 			self->y + self->height - 1 - height,
 			step,
-			height);
+			height,
+		};
 	}
-#endif   // WITH_FFTW
+
+	XRenderFillRectangles (g.dpy, PictOpSrc, g.x11_pixmap_picture,
+		x11_fg (self), rectangles, N_ELEMENTS (rectangles));
+#endif  // WITH_FFTW
+
+	// Enable the spectrum_redraw() hack.
+	XRectangle r = { self->x, self->y, self->width, self->height };
+	XUnionRectWithRegion (&r, g.x11_clip, g.x11_clip);
 }
 
 static struct widget *
@@ -5812,20 +5821,26 @@ x11_render (void)
 {
 	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
 		&x11_default_bg, 0, 0, g.ui_width, g.ui_height);
-
-	// TODO: Consider setting clip rectangles (not particularly needed).
 	LIST_FOR_EACH (struct widget, w, g.widgets.head)
 		if (w->width && w->height)
 			w->on_render (w);
+
+	XRectangle r = { 0, 0, g.ui_width, g.ui_height };
+	XUnionRectWithRegion (&r, g.x11_clip, g.x11_clip);
 	poller_idle_set (&g.xpending_event);
 }
 
 static void
 x11_flip (void)
 {
+	// This exercise in futility doesn't seem to affect CPU usage much.
+	XRectangle r = {};
+	XClipBox (g.x11_clip, &r);
 	XCopyArea (g.dpy, g.x11_pixmap, g.x11_window,
 		DefaultGC (g.dpy, DefaultScreen (g.dpy)),
-		0, 0, g.ui_width, g.ui_height, 0, 0);
+		r.x, r.y, r.width, r.height, r.x, r.y);
+
+	XSubtractRegion (g.x11_clip, g.x11_clip, g.x11_clip);
 	poller_idle_set (&g.xpending_event);
 }
 
@@ -5834,6 +5849,7 @@ x11_destroy (void)
 {
 	XDestroyIC (g.x11_ic);
 	XCloseIM (g.x11_im);
+	XDestroyRegion (g.x11_clip);
 	XDestroyWindow (g.dpy, g.x11_window);
 	XRenderFreePicture (g.dpy, g.x11_pixmap_picture);
 	XFreePixmap (g.dpy, g.x11_pixmap);
@@ -6072,9 +6088,13 @@ on_x11_event (XEvent *ev)
 	switch (ev->type)
 	{
 	case Expose:
-		if (!ev->xexpose.count)
-			poller_idle_set (&g.flip_event);
+	{
+		XRectangle r = { ev->xexpose.x, ev->xexpose.y,
+			ev->xexpose.width, ev->xexpose.height };
+		XUnionRectWithRegion (&r, g.x11_clip, g.x11_clip);
+		poller_idle_set (&g.flip_event);
 		break;
+	}
 	case ConfigureNotify:
 		if (g.ui_width == ev->xconfigure.width
 		 && g.ui_height == ev->xconfigure.height)
@@ -6308,6 +6328,7 @@ x11_init (void)
 	g.x11_window = XCreateWindow (g.dpy, RootWindow (g.dpy, screen), 100, 100,
 		g.ui_width, g.ui_height, 0, CopyFromParent, InputOutput, visual,
 		CWEventMask | CWBackPixel | CWBitGravity, &attrs);
+	g.x11_clip = XCreateRegion ();
 
 	XTextProperty prop = {};
 	char *name = PROGRAM_NAME;
