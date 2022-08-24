@@ -2508,6 +2508,17 @@ app_mpd_toggle (const char *name)
 	return MPD_SIMPLE (name, value ? "0" : "1");
 }
 
+static void
+app_hide_message (void)
+{
+	if (g.message)
+	{
+		cstr_set (&g.message, NULL);
+		poller_timer_reset (&g.message_timer);
+		app_invalidate ();
+	}
+}
+
 static bool
 app_process_action (enum action action)
 {
@@ -2542,6 +2553,7 @@ app_process_action (enum action action)
 		line_editor_start (&g.editor, ':');
 		g.editor.on_end = app_on_mpd_command_editor_end;
 		app_invalidate ();
+		app_hide_message ();
 		return true;
 	default:
 		print_error ("can't do that here: %s", g_action_descriptions[action]);
@@ -2563,6 +2575,7 @@ app_process_action (enum action action)
 		g.editor.on_changed = incremental_search_on_changed;
 		g.editor.on_end = incremental_search_on_end;
 		app_invalidate ();
+		app_hide_message ();
 		return true;
 
 	case ACTION_TAB_LAST:
@@ -2764,9 +2777,7 @@ app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
 		break;
 	}
 	case WIDGET_MESSAGE:
-		cstr_set (&g.message, NULL);
-		poller_timer_reset (&g.message_timer);
-		app_invalidate ();
+		app_hide_message ();
 	}
 	return true;
 }
@@ -3029,6 +3040,11 @@ app_process_termo_event (termo_key_t *event)
 	struct binding dummy = { *event, 0, 0 }, *binding;
 	if (g.editor.line)
 	{
+		if (event->type == TERMO_TYPE_KEY
+		 || event->type == TERMO_TYPE_FUNCTION
+		 || event->type == TERMO_TYPE_KEYSYM)
+			app_hide_message ();
+
 		if ((binding = bsearch (&dummy, g_editor_keys, g_editor_keys_len,
 			sizeof *binding, app_binding_cmp)))
 			return app_editor_process_action (binding->action);
