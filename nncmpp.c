@@ -4048,9 +4048,12 @@ help_tab_on_action (enum action action)
 		return false;
 
 	action = g_help_tab.actions[tab->item_selected];
-	return action != ACTION_NONE
-		&& action != ACTION_CHOOSE  // avoid recursion
-		&& app_process_action (action);
+	if (action == ACTION_NONE || action == ACTION_CHOOSE /* avoid recursion */)
+		return false;
+
+	// XXX: We can't propagate failure, which produces beeps in the TUI, but we
+	// don't want to let our caller show a bad "can't do that" message either.
+	return app_process_action (action), true;
 }
 
 static void
