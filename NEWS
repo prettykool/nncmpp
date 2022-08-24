@@ -2,6 +2,8 @@ Unreleased
 
  * Added an optional X11 user interface
 
+ * Implemented mouse drags on the elapsed time gauge and the scrollbar
+
  * Added a "z" binding to center the view on the selected item
 
  * Fixed possibility of connection timeouts with PulseAudio integration

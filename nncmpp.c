@@ -1335,6 +1335,7 @@ static struct app_context
 	int ui_hunit;                       ///< Horizontal unit
 	int ui_vunit;                       ///< Vertical unit
 	bool ui_focused;                    ///< Whether the window has focus
+	short ui_dragging;                  ///< ID of any dragged widget
 
 #ifdef WITH_FFTW
 	struct spectrum spectrum;           ///< Spectrum analyser
@@ -2715,6 +2716,7 @@ app_process_left_mouse_click (struct widget *w, int x, int y, bool double_click)
 		break;
 	case WIDGET_GAUGE:
 	{
+		// TODO: We should avoid queuing up too many.
 		float position = (float) x / w->width;
 		if (g.song_duration >= 1)
 		{
@@ -2776,8 +2778,27 @@ app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
 	// XXX: Terminals don't let us know which button has been released,
 	//   so we can't press buttons at that point.  We'd need a special "click"
 	//   event handler that could be handled better under X11.
-	if (type != TERMO_MOUSE_PRESS)
+	if (type == TERMO_MOUSE_RELEASE)
+	{
+		g.ui_dragging = WIDGET_NONE;
 		return true;
+	}
+
+	if (type == TERMO_MOUSE_DRAG)
+	{
+		if (g.ui_dragging != WIDGET_GAUGE
+		 && g.ui_dragging != WIDGET_SCROLLBAR)
+			return true;
+
+		struct widget *target = NULL;
+		LIST_FOR_EACH (struct widget, w, g.widgets.head)
+			if (w->id == g.ui_dragging)
+				target = w;
+
+		x -= target->x;
+		y -= target->y;
+		return app_process_left_mouse_click (target, x, y, double_click);
+	}
 
 	if (g.editor.line)
 	{
@@ -2798,6 +2819,7 @@ app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
 	switch (button)
 	{
 	case 1:
+		g.ui_dragging = target->id;
 		return app_process_left_mouse_click (target, x, y, double_click);
 	case 4:
 		if (target->id == WIDGET_LIST)
@@ -5258,6 +5280,8 @@ tui_init (void)
 	if (!termo_start (g.tk) || !initscr () || nonl () == ERR)
 		exit_fatal ("failed to set up the terminal");
 
+	termo_set_mouse_tracking_mode (g.tk, TERMO_MOUSE_TRACKING_DRAG);
+
 	g.ui = &tui_ui;
 	g.ui_width = COLS;
 	g.ui_height = LINES;
@@ -5955,6 +5979,13 @@ on_x11_input_event (XEvent *ev)
 		on_x11_keypress (ev);
 		return;
 	}
+	if (ev->type == MotionNotify)
+	{
+		// We only select for Button1MotionMask, so this works out.
+		int x = ev->xmotion.x, y = ev->xmotion.y;
+		app_process_mouse (TERMO_MOUSE_DRAG, x, y, 1, false);
+		return;
+	}
 
 	// See tui_on_tty_event().  Just here we know the button on button release.
 	int x = ev->xbutton.x, y = ev->xbutton.y;
@@ -6000,6 +6031,7 @@ on_x11_event (XEvent *ev)
 	case KeyPress:
 	case ButtonPress:
 	case ButtonRelease:
+	case MotionNotify:
 		on_x11_input_event (ev);
 		break;
 	case UnmapNotify:
@@ -6196,7 +6228,8 @@ x11_init (void)
 	XSetWindowAttributes attrs =
 	{
 		.event_mask = StructureNotifyMask | ExposureMask | FocusChangeMask
-			| KeyPressMask | ButtonPressMask | ButtonReleaseMask,
+			| KeyPressMask | ButtonPressMask | ButtonReleaseMask
+			| Button1MotionMask,
 		.bit_gravity = NorthWestGravity,
 		.background_pixel = default_bg.pixel,
 	};
