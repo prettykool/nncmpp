@@ -2095,32 +2095,46 @@ app_layout_view (void)
 	app_flush_layout (&l);
 }
 
-static char *
-app_mpd_status_playlist (void)
+static void
+app_layout_mpd_status_playlist (struct layout *l, chtype attrs)
 {
-	struct str stats = str_make ();
-	if (g.playlist.len == 1)
-		str_append_printf (&stats, "1 song ");
-	else
-		str_append_printf (&stats, "%zu songs ", g.playlist.len);
+	char *songs = (g.playlist.len == 1)
+		? xstrdup_printf ("1 song")
+		: xstrdup_printf ("%zu songs", g.playlist.len);
+	app_push (l, g.ui->label (attrs, songs));
+	free (songs);
 
 	int hours   = g.playlist_time / 3600;
 	int minutes = g.playlist_time % 3600 / 60;
 	if (hours || minutes)
 	{
-		str_append_c (&stats, ' ');
-
+		struct str length = str_make ();
 		if (hours == 1)
-			str_append_printf (&stats, " 1 hour");
+			str_append_printf (&length, " 1 hour");
 		else if (hours)
-			str_append_printf (&stats, " %d hours", hours);
+			str_append_printf (&length, " %d hours", hours);
 
 		if (minutes == 1)
-			str_append_printf (&stats, " 1 minute");
+			str_append_printf (&length, " 1 minute");
 		else if (minutes)
-			str_append_printf (&stats, " %d minutes", minutes);
+			str_append_printf (&length, " %d minutes", minutes);
+
+		app_push (l, g.ui->padding (attrs, 1, 1));
+		app_push (l, g.ui->label (attrs, length.str + 1));
+		str_free (&length);
 	}
-	return str_steal (&stats);
+
+	const char *task = NULL;
+	if (g.poller_curl.registered)
+		task = "Downloading...";
+	else if (str_map_find (&g.playback_info, "updating_db"))
+		task = "Updating database...";
+
+	if (task)
+	{
+		app_push (l, g.ui->padding (attrs, 1, 1));
+		app_push (l, g.ui->label (attrs, task));
+	}
 }
 
 static void
@@ -2130,7 +2144,6 @@ app_layout_mpd_status (void)
 	chtype attrs[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
 	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
 
-	struct str_map *map = &g.playback_info;
 	if (g.active_tab->item_mark > -1)
 	{
 		struct tab_range r = tab_selection_range (g.active_tab);
@@ -2139,18 +2152,14 @@ app_layout_mpd_status (void)
 		app_push_fill (&l, g.ui->label (attrs[0], msg));
 		free (msg);
 	}
-	else if (g.poller_curl.registered)
-		app_push_fill (&l, g.ui->label (attrs[0], "Downloading..."));
-	else if (str_map_find (map, "updating_db"))
-		app_push_fill (&l, g.ui->label (attrs[0], "Updating database..."));
 	else
 	{
-		char *status = app_mpd_status_playlist ();
-		app_push_fill (&l, g.ui->label (attrs[0], status));
-		free (status);
+		app_layout_mpd_status_playlist (&l, attrs[0]);
+		l.tail->width = -1;
 	}
 
-	const char *s;
+	const char *s = NULL;
+	struct str_map *map = &g.playback_info;
 	bool repeat  = (s = str_map_find (map, "repeat"))  && strcmp (s, "0");
 	bool random  = (s = str_map_find (map, "random"))  && strcmp (s, "0");
 	bool single  = (s = str_map_find (map, "single"))  && strcmp (s, "0");
