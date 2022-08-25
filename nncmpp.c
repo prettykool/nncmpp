@@ -2625,7 +2625,8 @@ app_process_action (enum action action)
 		app_hide_message ();
 		return true;
 	default:
-		print_error ("can't do that here: %s", g_action_descriptions[action]);
+		print_error ("\"%s\" is not allowed here",
+			g_action_descriptions[action]);
 		return false;
 
 	case ACTION_MULTISELECT:
@@ -2757,7 +2758,8 @@ app_editor_process_action (enum action action)
 		g.editor.on_end = NULL;
 		return true;
 	default:
-		print_error ("can't do that here: %s", g_action_descriptions[action]);
+		print_error ("\"%s\" is not allowed here",
+			g_action_descriptions[action]);
 		return false;
 
 	case ACTION_EDITOR_B_CHAR:
