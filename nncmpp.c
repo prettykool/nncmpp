@@ -741,7 +741,8 @@ spectrum_sample (struct spectrum *s)
 }
 
 static bool
-spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
+spectrum_init (struct spectrum *s, char *format, int bars, int fps,
+	struct error **e)
 {
 	errno = 0;
 
@@ -817,8 +818,7 @@ spectrum_init (struct spectrum *s, char *format, int bars, struct error **e)
 		s->top_bins[bar] = MIN (top_bin, used_bins);
 	}
 
-	// Limit updates to 30 times per second to limit CPU load
-	s->samples = s->sampling_rate / s->bins * 2 / 30;
+	s->samples = s->sampling_rate / s->bins * 2 / MAX (fps, 1);
 	if (s->samples < 1)
 		s->samples = 1;
 
@@ -1461,6 +1461,10 @@ static struct config_schema g_config_settings[] =
 	  .comment   = "Number of computed audio spectrum bars",
 	  .type      = CONFIG_ITEM_INTEGER,
 	  .default_  = "8" },
+	{ .name      = "spectrum_fps",
+	  .comment   = "Maximum frames per second, affects CPU usage",
+	  .type      = CONFIG_ITEM_INTEGER,
+	  .default_  = "30" },
 #endif  // WITH_FFTW
 
 #ifdef WITH_PULSE
@@ -4349,6 +4353,8 @@ spectrum_setup_fifo (void)
 		get_config_string (g.config.root, "settings.spectrum_format");
 	struct config_item *spectrum_bars =
 		config_item_get (g.config.root, "settings.spectrum_bars", NULL);
+	struct config_item *spectrum_fps =
+		config_item_get (g.config.root, "settings.spectrum_fps", NULL);
 	if (!spectrum_path)
 		return;
 
@@ -4360,8 +4366,8 @@ spectrum_setup_fifo (void)
 		print_error ("spectrum: %s", "FIFO path could not be resolved");
 	else if (!g.locale_is_utf8)
 		print_error ("spectrum: %s", "UTF-8 locale required");
-	else if (!spectrum_init (&g.spectrum,
-		(char *) spectrum_format, spectrum_bars->value.integer, &e))
+	else if (!spectrum_init (&g.spectrum, (char *) spectrum_format,
+		spectrum_bars->value.integer, spectrum_fps->value.integer, &e))
 	{
 		print_error ("spectrum: %s", e->message);
 		error_free (e);
