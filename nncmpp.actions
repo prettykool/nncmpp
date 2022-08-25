@@ -36,6 +36,7 @@ PULSE_MUTE,         Toggle PulseAudio sink mute
 
 CHOOSE,             Choose item
 DELETE,             Delete item
+DESCRIBE,           Describe item
 UP,                 Go up a level
 MULTISELECT,        Toggle multiselect
 INCREMENTAL_SEARCH, Incremental search

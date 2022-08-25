@@ -6,6 +6,8 @@ Unreleased
 
  * Added a "z" binding to center the view on the selected item
 
+ * Added a "?" binding to describe items in various tabs
+
  * Made it possible to adjust the spectrum analyzer's FPS limit
 
  * Fixed possibility of connection timeouts with PulseAudio integration

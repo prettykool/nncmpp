@@ -1298,6 +1298,7 @@ static struct app_context
 
 	struct poller_timer message_timer;  ///< Message timeout
 	char *message;                      ///< Message to show in the statusbar
+	char *message_detail;               ///< Non-emphasized part
 
 	// Connection:
 
@@ -1700,6 +1701,7 @@ app_free_context (void)
 	poller_curl_free (&g.poller_curl);
 	poller_free (&g.poller);
 	free (g.message);
+	free (g.message_detail);
 
 	if (g.tk)
 		termo_destroy (g.tk);
@@ -2239,21 +2241,28 @@ static void
 app_layout_statusbar (void)
 {
 	struct layout l = {};
+	chtype attrs[2] = { APP_ATTR (NORMAL), APP_ATTR (HIGHLIGHT) };
 	if (g.message)
 	{
-		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1))
-			->id = WIDGET_MESSAGE;
-		app_push_fill (&l, g.ui->label (APP_ATTR (HIGHLIGHT), g.message))
-			->id = WIDGET_MESSAGE;
-		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1))
-			->id = WIDGET_MESSAGE;
+		app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+		if (!g.message_detail)
+			app_push_fill (&l, g.ui->label (attrs[1], g.message));
+		else
+		{
+			app_push (&l, g.ui->label (attrs[1], g.message));
+			app_push_fill (&l, g.ui->label (attrs[0], g.message_detail));
+		}
+		app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+
 		app_flush_layout (&l);
+		LIST_FOR_EACH (struct widget, w, l.head)
+			w->id = WIDGET_MESSAGE;
 	}
 	else if (g.editor.line)
 	{
-		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1));
-		app_push (&l, g.ui->editor (APP_ATTR (HIGHLIGHT)));
-		app_push (&l, g.ui->padding (APP_ATTR (NORMAL), 0.25, 1));
+		app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
+		app_push (&l, g.ui->editor (attrs[1]));
+		app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
 		app_flush_layout (&l);
 	}
 	else if (g.client.state == MPD_CONNECTED)
@@ -2373,6 +2382,27 @@ app_move_selection (int diff)
 
 	app_ensure_selection_visible ();
 	return result;
+}
+
+static void
+app_show_message (char *message, char *detail)
+{
+	cstr_set (&g.message, message);
+	cstr_set (&g.message_detail, detail);
+	poller_timer_set (&g.message_timer, 5000);
+	app_invalidate ();
+}
+
+static void
+app_hide_message (void)
+{
+	if (!g.message)
+		return;
+
+	cstr_set (&g.message, NULL);
+	cstr_set (&g.message_detail, NULL);
+	poller_timer_reset (&g.message_timer);
+	app_invalidate ();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2556,17 +2586,6 @@ app_mpd_toggle (const char *name)
 	const char *s = str_map_find (&g.playback_info, name);
 	bool value = s && strcmp (s, "0");
 	return MPD_SIMPLE (name, value ? "0" : "1");
-}
-
-static void
-app_hide_message (void)
-{
-	if (g.message)
-	{
-		cstr_set (&g.message, NULL);
-		poller_timer_reset (&g.message_timer);
-		app_invalidate ();
-	}
 }
 
 static bool
@@ -2962,6 +2981,7 @@ g_normal_defaults[] =
 	{ "Enter",      ACTION_CHOOSE             },
 	{ "Delete",     ACTION_DELETE             },
 	{ "d",          ACTION_DELETE             },
+	{ "?",          ACTION_DESCRIBE           },
 	{ "M-Up",       ACTION_UP                 },
 	{ "Backspace",  ACTION_UP                 },
 	{ "v",          ACTION_MULTISELECT        },
@@ -3238,6 +3258,12 @@ current_tab_on_action (enum action action)
 		tab->item_mark = -1;
 		return map && (id = compact_map_find (map, "id"))
 			&& MPD_SIMPLE ("playid", id);
+	case ACTION_DESCRIBE:
+		if (!map || !(id = compact_map_find (map, "file")))
+			return false;
+
+		app_show_message (xstrdup ("Path: "), xstrdup (id));
+		return true;
 	case ACTION_DELETE:
 	{
 		struct mpd_client *c = &g.client;
@@ -3652,6 +3678,12 @@ library_tab_on_action (enum action action)
 		}
 		tab->item_mark = -1;
 		return true;
+	case ACTION_DESCRIBE:
+		if (!*x->path)
+			break;
+
+		app_show_message (xstrdup ("Path: "), xstrdup (x->path));
+		return true;
 	case ACTION_UP:
 	{
 		char *parent = library_tab_parent ();
@@ -3990,6 +4022,9 @@ streams_tab_on_action (enum action action)
 	case ACTION_MPD_ADD:
 		streams_tab_process (uri, false, &e);
 		break;
+	case ACTION_DESCRIBE:
+		app_show_message (xstrdup (uri), NULL);
+		break;
 	default:
 		return false;
 	}
@@ -4103,17 +4138,26 @@ help_tab_on_action (enum action action)
 {
 	struct tab *tab = &g_help_tab.super;
 	if (tab->item_selected < 0
-	 || tab->item_selected >= (int) g_help_tab.actions_len
-	 || action != ACTION_CHOOSE)
+	 || tab->item_selected >= (int) g_help_tab.actions_len)
 		return false;
 
-	action = g_help_tab.actions[tab->item_selected];
-	if (action == ACTION_NONE || action == ACTION_CHOOSE /* avoid recursion */)
+	enum action a = g_help_tab.actions[tab->item_selected];
+	if (!a)
+		return false;
+
+	if (action == ACTION_DESCRIBE)
+	{
+		char *name = xstrdup (g_action_names[a]);
+		cstr_transform (name, tolower_ascii);
+		app_show_message (xstrdup ("Configuration name: "), name);
+		return true;
+	}
+	if (action != ACTION_CHOOSE || a == ACTION_CHOOSE /* avoid recursion */)
 		return false;
 
 	// XXX: We can't propagate failure to ring the terminal/X11 bell, but we
 	//   don't want to let our caller show a bad "can't do that" message either.
-	return app_process_action (action), true;
+	return app_process_action (a), true;
 }
 
 static void
@@ -6078,11 +6122,8 @@ x11_process_press (int x, int y, int button, int modifiers)
 	cstr_set (&g.x11_selection, text);
 	XSetSelectionOwner (g.dpy, XInternAtom (g.dpy, "CLIPBOARD", False),
 		g.x11_window, CurrentTime);
-
-	cstr_set (&g.message,
-		xstrdup_printf ("Text copied to clipboard: %s", g.x11_selection));
-	poller_timer_set (&g.message_timer, 5000);
-	app_invalidate ();
+	app_show_message (xstrdup ("Text copied to clipboard: "),
+		xstrdup (g.x11_selection));
 	return true;
 
 out:
@@ -6585,6 +6626,7 @@ app_on_message_timer (void *user_data)
 	(void) user_data;
 
 	cstr_set (&g.message, NULL);
+	cstr_set (&g.message_detail, NULL);
 	app_invalidate ();
 }
 
@@ -6601,12 +6643,13 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 
 	struct str message = str_make ();
 	str_append (&message, quote);
+	size_t quote_len = message.len;
 	str_append_vprintf (&message, fmt, ap);
 
-	// Show it to the user, then maybe log it elsewhere as well.
-	cstr_set (&g.message, xstrdup (message.str));
-	poller_timer_set (&g.message_timer, 5000);
-	app_invalidate ();
+	// Show it prettified to the user, then maybe log it elsewhere as well.
+	message.str[0] = toupper_ascii (message.str[0]);
+	app_show_message (xstrndup (message.str, quote_len),
+		xstrdup (message.str + quote_len));
 
 	if (g_verbose_mode && (g.ui != &tui_ui || !isatty (STDERR_FILENO)))
 		fprintf (stderr, "%s\n", message.str);
