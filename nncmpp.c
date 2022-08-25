@@ -109,6 +109,7 @@ enum
 
 // Elementary port of the TUI to X11.
 #ifdef WITH_X11
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <X11/XKBlib.h>
@@ -1152,6 +1153,9 @@ struct widget;
 /// Draw a widget on the window
 typedef void (*widget_render_fn) (struct widget *self);
 
+/// Extract the contents of container widgets
+typedef struct widget *(*widget_sublayout_fn) (struct widget *self);
+
 /// A minimal abstraction appropriate for both TUI and GUI widgets.
 /// Units for the widget's region are frontend-specific.
 /// Having this as a linked list simplifies layouting and memory management.
@@ -1165,6 +1169,7 @@ struct widget
 	int height;                         ///< Height, initialized by UI methods
 
 	widget_render_fn on_render;         ///< Render callback
+	widget_sublayout_fn on_sublayout;   ///< Optional sublayout callback
 	chtype attrs;                       ///< Rendition, in Curses terms
 
 	short id;                           ///< Post-layouting identification
@@ -1362,6 +1367,7 @@ static struct app_context
 	XftDraw *xft_draw;                  ///< Xft rendering context
 	XftFont *xft_regular;               ///< Regular font
 	XftFont *xft_bold;                  ///< Bold font
+	char *x11_selection;                ///< CLIPBOARD selection
 
 	XRenderColor x_fg[ATTRIBUTE_COUNT]; ///< Foreground per attribute
 	XRenderColor x_bg[ATTRIBUTE_COUNT]; ///< Background per attribute
@@ -1736,14 +1742,14 @@ app_invalidate (void)
 }
 
 static void
-app_flush_layout (struct layout *l)
+app_flush_layout_to (struct layout *l, int width, struct layout *dest)
 {
 	hard_assert (l != NULL && l->head != NULL);
-	widget_redistribute (l->head, g.ui_width);
+	widget_redistribute (l->head, width);
 
-	struct widget *last = g.widgets.tail;
+	struct widget *last = dest->tail;
 	if (!last)
-		g.widgets = *l;
+		*dest = *l;
 	else
 	{
 		// Assuming there is no unclaimed vertical space.
@@ -1752,8 +1758,14 @@ app_flush_layout (struct layout *l)
 
 		last->next = l->head;
 		l->head->prev = last;
-		g.widgets.tail = l->tail;
+		dest->tail = l->tail;
 	}
+}
+
+static void
+app_flush_layout (struct layout *l)
+{
+	app_flush_layout_to (l, g.ui_width, &g.widgets);
 }
 
 static struct widget *
@@ -2041,7 +2053,7 @@ app_compute_scrollbar (struct tab *tab, long visible, long s)
 	return (struct scrollbar) { length, offset };
 }
 
-static struct widget *
+static struct layout
 app_layout_row (struct tab *tab, int item_index)
 {
 	int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
@@ -2074,6 +2086,30 @@ app_layout_row (struct tab *tab, int item_index)
 			*attrs |= (row_attrs & ~A_COLOR);
 		else
 			*attrs |=  row_attrs;
+	}
+	return l;
+}
+
+// XXX: This isn't a very clean design, in that part of layouting
+//   is done during the rendering stage.
+static struct widget *
+app_sublayout_list (struct widget *list)
+{
+	struct tab *tab = g.active_tab;
+	int to_show = MIN ((int) tab->item_count - tab->item_top,
+		list->height / g.ui_vunit);
+
+	struct layout l = {};
+	for (int row = 0; row < to_show; row++)
+	{
+		int item_index = tab->item_top + row;
+		struct layout subl = app_layout_row (tab, item_index);
+		app_flush_layout_to (&subl, list->width, &l);
+	}
+	LIST_FOR_EACH (struct widget, w, l.head)
+	{
+		w->x += list->x;
+		w->y += list->y;
 	}
 	return l.head;
 }
@@ -5124,28 +5160,10 @@ tui_make_scrollbar (chtype attrs)
 static void
 tui_render_list (struct widget *self)
 {
-	struct tab *tab = g.active_tab;
-	int to_show =
-		MIN (app_visible_items (), (int) tab->item_count - tab->item_top);
-	for (int row = 0; row < to_show; row++)
+	LIST_FOR_EACH (struct widget, w, self->on_sublayout (self))
 	{
-		int item_index = tab->item_top + row;
-		struct widget *head = app_layout_row (tab, item_index);
-		widget_redistribute (head, self->width);
-
-		int x = self->x;
-		int y = self->y + row * g.ui_vunit;
-		LIST_FOR_EACH (struct widget, w, head)
-		{
-			w->x += x;
-			w->y += y;
-		}
-
-		LIST_FOR_EACH (struct widget, w, head)
-		{
-			w->on_render (w);
-			free (w);
-		}
+		w->on_render (w);
+		free (w);
 	}
 }
 
@@ -5156,6 +5174,7 @@ tui_make_list (void)
 	w->width = -1;
 	w->height = g.active_tab->item_count;
 	w->on_render = tui_render_list;
+	w->on_sublayout = app_sublayout_list;
 	return w;
 }
 
@@ -5749,28 +5768,10 @@ x11_render_list (struct widget *self)
 {
 	x11_render_padding (self);
 
-	struct tab *tab = g.active_tab;
-	int to_show =
-		MIN (app_visible_items (), (int) tab->item_count - tab->item_top);
-	for (int row = 0; row < to_show; row++)
+	LIST_FOR_EACH (struct widget, w, self->on_sublayout (self))
 	{
-		int item_index = tab->item_top + row;
-		struct widget *head = app_layout_row (tab, item_index);
-		widget_redistribute (head, self->width);
-
-		int x = self->x;
-		int y = self->y + row * g.ui_vunit;
-		LIST_FOR_EACH (struct widget, w, head)
-		{
-			w->x += x;
-			w->y += y;
-		}
-
-		LIST_FOR_EACH (struct widget, w, head)
-		{
-			w->on_render (w);
-			free (w);
-		}
+		w->on_render (w);
+		free (w);
 	}
 }
 
@@ -5779,6 +5780,7 @@ x11_make_list (void)
 {
 	struct widget *w = xcalloc (1, sizeof *w + 1);
 	w->on_render = x11_render_list;
+	w->on_sublayout = app_sublayout_list;
 	return w;
 }
 
@@ -5862,6 +5864,7 @@ x11_destroy (void)
 	XftDrawDestroy (g.xft_draw);
 	XftFontClose (g.dpy, g.xft_regular);
 	XftFontClose (g.dpy, g.xft_bold);
+	cstr_set (&g.x11_selection, NULL);
 
 	poller_fd_reset (&g.x11_event);
 	XCloseDisplay (g.dpy);
@@ -6035,6 +6038,57 @@ x11_init_pixmap (void)
 		= XRenderCreatePicture (g.dpy, g.x11_pixmap, format, 0, NULL);
 }
 
+static char *
+x11_find_text (struct widget *list, int x, int y)
+{
+	struct widget *target = NULL;
+	LIST_FOR_EACH (struct widget, w, list)
+		if (x >= w->x && x < w->x + w->width
+		 && y >= w->y && y < w->y + w->height)
+			target = w;
+	if (!target)
+		return NULL;
+
+	if (target->on_sublayout)
+	{
+		struct widget *sublist = target->on_sublayout (target);
+		char *result = x11_find_text (sublist, x, y);
+		LIST_FOR_EACH (struct widget, w, sublist)
+			free (w);
+		if (result)
+			return result;
+	}
+	return xstrdup (target->text);
+}
+
+// TODO: OSC 52 exists for terminals, so make it possible to enable that there.
+static bool
+x11_process_press (int x, int y, int button, int modifiers)
+{
+	if (button != Button3)
+		goto out;
+
+	char *text = x11_find_text (g.widgets.head, x, y);
+	if (!text || !*(cstr_strip_in_place (text, " \t")))
+	{
+		free (text);
+		goto out;
+	}
+
+	cstr_set (&g.x11_selection, text);
+	XSetSelectionOwner (g.dpy, XInternAtom (g.dpy, "CLIPBOARD", False),
+		g.x11_window, CurrentTime);
+
+	cstr_set (&g.message,
+		xstrdup_printf ("Text copied to clipboard: %s", g.x11_selection));
+	poller_timer_set (&g.message_timer, 5000);
+	app_invalidate ();
+	return true;
+
+out:
+	return app_process_mouse (TERMO_MOUSE_PRESS, x, y, button, modifiers);
+}
+
 static int
 x11_state_to_modifiers (unsigned int state)
 {
@@ -6079,12 +6133,64 @@ on_x11_input_event (XEvent *ev)
 		last_press_event = *ev;
 
 	if (ev->type == ButtonPress)
-		return app_process_mouse
-			(TERMO_MOUSE_PRESS, x, y, button, modifiers);
+		return x11_process_press (x, y, button, modifiers);
 	if (ev->type == ButtonRelease)
 		return app_process_mouse
 			(TERMO_MOUSE_RELEASE, x, y, button, modifiers);
 	return false;
+}
+
+static void
+on_x11_selection_request (XSelectionRequestEvent *ev)
+{
+	Atom xa_targets = XInternAtom (g.dpy, "TARGETS", False);
+	Atom xa_compound_text = XInternAtom (g.dpy, "COMPOUND_TEXT", False);
+	Atom xa_utf8 = XInternAtom (g.dpy, "UTF8_STRING", False);
+	Atom targets[] = { xa_targets, XA_STRING, xa_compound_text, xa_utf8 };
+
+	bool ok = false;
+	Atom property = ev->property ? ev->property : ev->target;
+	if (!g.x11_selection)
+		goto out;
+
+	XICCEncodingStyle style = 0;
+	if ((ok = ev->target == xa_targets))
+	{
+		XChangeProperty (g.dpy, ev->requestor, property,
+			XA_ATOM, 32, PropModeReplace,
+			(const unsigned char *) targets, N_ELEMENTS (targets));
+		goto out;
+	}
+	else if (ev->target == XA_STRING)
+		style = XStringStyle;
+	else if (ev->target == xa_compound_text)
+		style = XCompoundTextStyle;
+	else if (ev->target == xa_utf8)
+		style = XUTF8StringStyle;
+	else
+		goto out;
+
+	// XXX: We let it crash us with BadLength, but we may, e.g., use INCR.
+	XTextProperty text = {};
+	if ((ok = !Xutf8TextListToTextProperty
+		 (g.dpy, &g.x11_selection, 1, style, &text)))
+	{
+		XChangeProperty (g.dpy, ev->requestor, property,
+			text.encoding, text.format, PropModeReplace,
+			text.value, text.nitems);
+	}
+	XFree (text.value);
+
+out:
+	XEvent response = {};
+	response.xselection.type = SelectionNotify;
+	// XXX: We should check it against the event causing XSetSelectionOwner().
+	response.xselection.time = ev->time;
+	response.xselection.requestor = ev->requestor;
+	response.xselection.selection = ev->selection;
+	response.xselection.target = ev->target;
+	response.xselection.property = ok ? property : None;
+	XSendEvent (g.dpy, ev->requestor, False, 0, &response);
 }
 
 static void
@@ -6114,6 +6220,12 @@ on_x11_event (XEvent *ev)
 		x11_init_pixmap ();
 		XftDrawChange (g.xft_draw, g.x11_pixmap);
 		app_invalidate ();
+		break;
+	case SelectionRequest:
+		on_x11_selection_request (&ev->xselectionrequest);
+		break;
+	case SelectionClear:
+		cstr_set (&g.x11_selection, NULL);
 		break;
 	case UnmapNotify:
 		app_quit ();
@@ -6172,6 +6284,11 @@ on_x11_error (Display *dpy, XErrorEvent *event)
 	if ((event->error_code == BadWindow && event->resourceid == g.x11_window)
 	 || (event->error_code == BadDrawable && event->resourceid == g.x11_window))
 		return app_quit (), 0;
+
+	// XXX: The simplest possible way of discarding selection management errors.
+	//   XCB would be a small win here, but it is a curse at the same time.
+	if (event->error_code == BadWindow && event->resourceid != g.x11_window)
+		return 0;
 
 	return x11_default_error_handler (dpy, event);
 }
