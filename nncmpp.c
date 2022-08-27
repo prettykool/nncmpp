@@ -2948,6 +2948,8 @@ g_normal_defaults[] =
 	{ "C-l",        ACTION_REDRAW             },
 	{ "M-Tab",      ACTION_TAB_LAST           },
 	{ "F1",         ACTION_TAB_HELP           },
+	{ "S-Tab",      ACTION_TAB_PREVIOUS       },
+	{ "Tab",        ACTION_TAB_NEXT           },
 	{ "C-Left",     ACTION_TAB_PREVIOUS       },
 	{ "C-Right",    ACTION_TAB_NEXT           },
 	{ "C-PageUp",   ACTION_TAB_PREVIOUS       },
@@ -5951,6 +5953,7 @@ x11_convert_keysym (KeySym keysym)
 	{
 	case XK_BackSpace:     return TERMO_SYM_BACKSPACE;
 	case XK_Tab:           return TERMO_SYM_TAB;
+	case XK_ISO_Left_Tab:  return TERMO_SYM_TAB;
 	case XK_Return:        return TERMO_SYM_ENTER;
 	case XK_Escape:        return TERMO_SYM_ESCAPE;
 

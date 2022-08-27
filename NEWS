@@ -4,6 +4,8 @@ Unreleased
 
  * Implemented mouse drags on the elapsed time gauge and the scrollbar
 
+ * Added Tab and S-Tab bindings to iterate tabs
+
  * Added a "z" binding to center the view on the selected item
 
  * Added a "?" binding to describe items in various tabs
