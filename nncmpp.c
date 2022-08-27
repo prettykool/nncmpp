@@ -3108,9 +3108,28 @@ app_init_bindings (const char *keymap,
 	return a;
 }
 
+static char *
+app_strfkey (const termo_key_t *key)
+{
+	// For display purposes, this is highly desirable
+	int flags = termo_get_flags (g.tk);
+	termo_set_flags (g.tk, flags | TERMO_FLAG_SPACESYMBOL);
+	termo_key_t fixed = *key;
+	termo_canonicalise (g.tk, &fixed);
+	termo_set_flags (g.tk, flags);
+
+	char buf[16] = "";
+	termo_strfkey_utf8 (g.tk, buf, sizeof buf, &fixed, TERMO_FORMAT_ALTISMETA);
+	return xstrdup (buf);
+}
+
 static bool
 app_process_termo_event (termo_key_t *event)
 {
+	char *formatted = app_strfkey (event);
+	print_debug ("%s", formatted);
+	free (formatted);
+
 	bool handled = false;
 	if ((handled = event->type == TERMO_TYPE_FOCUS))
 	{
@@ -4163,21 +4182,6 @@ help_tab_on_action (enum action action)
 }
 
 static void
-help_tab_strfkey (const termo_key_t *key, struct strv *out)
-{
-	// For display purposes, this is highly desirable
-	int flags = termo_get_flags (g.tk);
-	termo_set_flags (g.tk, flags | TERMO_FLAG_SPACESYMBOL);
-	termo_key_t fixed = *key;
-	termo_canonicalise (g.tk, &fixed);
-	termo_set_flags (g.tk, flags);
-
-	char buf[16];
-	termo_strfkey_utf8 (g.tk, buf, sizeof buf, &fixed, TERMO_FORMAT_ALTISMETA);
-	strv_append (out, buf);
-}
-
-static void
 help_tab_assign_action (enum action action)
 {
 	hard_assert (g_help_tab.lines.len > g_help_tab.actions_len);
@@ -4198,7 +4202,7 @@ help_tab_group (struct binding *keys, size_t len, struct strv *out,
 		struct strv ass = strv_make ();
 		for (size_t k = 0; k < len; k++)
 			if (keys[k].action == i)
-				help_tab_strfkey (&keys[k].decoded, &ass);
+				strv_append_owned (&ass, app_strfkey (&keys[k].decoded));
 		if (ass.len)
 		{
 			char *joined = strv_join (&ass, ", ");
