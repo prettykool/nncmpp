@@ -6061,8 +6061,14 @@ on_x11_keypress (XEvent *e)
 			memcpy (k.multibyte, p, MIN (cp_len, sizeof k.multibyte - 1));
 			p += cp_len;
 
-			// This is unfortunate, but probably in the right place.
-			if (cp >= 32)
+			// This is all unfortunate, but probably in the right place.
+			if (!cp)
+			{
+				k.code.codepoint = ' ';
+				if (ev->state & ShiftMask)
+					k.modifiers |= TERMO_KEYMOD_SHIFT;
+			}
+			else if (cp >= 32)
 				k.code.codepoint = cp;
 			else if (ev->state & ShiftMask)
 				k.code.codepoint = cp + 64;
