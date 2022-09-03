@@ -2014,7 +2014,7 @@ app_layout_header (void)
 }
 
 static int
-app_visible_items (void)
+app_visible_items_height (void)
 {
 	struct widget *list = NULL;
 	LIST_FOR_EACH (struct widget, w, g.widgets.head)
@@ -2024,7 +2024,13 @@ app_visible_items (void)
 	hard_assert (list != NULL);
 
 	// The raw number of items that would have fit on the terminal
-	return MAX (0, list->height / g.ui_vunit);
+	return MAX (0, list->height);
+}
+
+static int
+app_visible_items (void)
+{
+	return app_visible_items_height () / g.ui_vunit;
 }
 
 /// Figure out scrollbar appearance.  @a s is the minimal slider length as well
@@ -2032,7 +2038,7 @@ app_visible_items (void)
 struct scrollbar { long length, start; }
 app_compute_scrollbar (struct tab *tab, long visible, long s)
 {
-	long top = tab->item_top, total = tab->item_count;
+	long top = s * tab->item_top, total = s * tab->item_count;
 	if (total < visible)
 		return (struct scrollbar) { 0, 0 };
 	if (visible == 1)
@@ -2042,7 +2048,7 @@ app_compute_scrollbar (struct tab *tab, long visible, long s)
 
 	// Only be at the top or bottom when the top or bottom item can be seen.
 	// The algorithm isn't optimal but it's a bitch to get right.
-	double available_length = s * visible - 2 - s + 1;
+	double available_length = visible - 2 - s + 1;
 
 	double lenf = s + available_length * visible / total, length = 0.;
 	long offset = 1 + available_length * top / total + modf (lenf, &length);
@@ -2050,7 +2056,7 @@ app_compute_scrollbar (struct tab *tab, long visible, long s)
 	if (top == 0)
 		return (struct scrollbar) { length, 0 };
 	if (top + visible >= total)
-		return (struct scrollbar) { length, s * visible - length };
+		return (struct scrollbar) { length, visible - length };
 
 	return (struct scrollbar) { length, offset };
 }
@@ -5171,7 +5177,7 @@ tui_render_scrollbar (struct widget *self)
 		return;
 	}
 
-	struct scrollbar bar = app_compute_scrollbar (tab, visible_items, 8);
+	struct scrollbar bar = app_compute_scrollbar (tab, visible_items * 8, 8);
 	bar.length += bar.start;
 
 	int start_part = bar.start  % 8; bar.start  /= 8;
@@ -5791,10 +5797,8 @@ x11_render_scrollbar (struct widget *self)
 	x11_render_padding (self);
 
 	struct tab *tab = g.active_tab;
-	// FIXME: This isn't an integer number in this case.
-	int visible_items = app_visible_items ();
 	struct scrollbar bar =
-		app_compute_scrollbar (tab, visible_items, g.ui_vunit);
+		app_compute_scrollbar (tab, app_visible_items_height (), g.ui_vunit);
 
 	XRenderFillRectangle (g.dpy, PictOpSrc, g.x11_pixmap_picture,
 		x11_fg_attrs (self->attrs),
