@@ -1836,7 +1836,7 @@ app_layout_song_info (void)
 	}
 	if (album)
 	{
-		app_push (&l, g.ui->label (attrs[0], " from " + !artist));
+		app_push (&l, g.ui->label (attrs[0], &" from "[!artist]));
 		app_push (&l, g.ui->label (attrs[1], album));
 	}
 
@@ -5572,55 +5572,56 @@ x11_make_label (chtype attrs, const char *label)
 }
 
 // On a 20x20 raster to make it feasible to design on paper.
-static const XPointDouble x11_stop = {INFINITY, INFINITY},
+#define X11_STOP {INFINITY, INFINITY}
+static const XPointDouble
 	x11_icon_previous[] =
 	{
-		{10, 0}, {0, 10}, {10, 20}, x11_stop,
-		{20, 0}, {10, 10}, {20, 20}, x11_stop, x11_stop,
+		{10, 0}, {0, 10}, {10, 20}, X11_STOP,
+		{20, 0}, {10, 10}, {20, 20}, X11_STOP, X11_STOP,
 	},
 	x11_icon_pause[] =
 	{
-		{1, 0}, {7, 0}, {7, 20}, {1, 20}, x11_stop,
-		{13, 0}, {19, 0}, {19, 20}, {13, 20}, x11_stop, x11_stop,
+		{1, 0}, {7, 0}, {7, 20}, {1, 20}, X11_STOP,
+		{13, 0}, {19, 0}, {19, 20}, {13, 20}, X11_STOP, X11_STOP,
 	},
 	x11_icon_play[] =
 	{
-		{0, 0}, {20, 10}, {0, 20}, x11_stop, x11_stop,
+		{0, 0}, {20, 10}, {0, 20}, X11_STOP, X11_STOP,
 	},
 	x11_icon_stop[] =
 	{
-		{0, 0}, {20, 0}, {20, 20}, {0, 20}, x11_stop, x11_stop,
+		{0, 0}, {20, 0}, {20, 20}, {0, 20}, X11_STOP, X11_STOP,
 	},
 	x11_icon_next[] =
 	{
-		{0, 0}, {10, 10}, {0, 20}, x11_stop,
-		{10, 0}, {20, 10}, {10, 20}, x11_stop, x11_stop,
+		{0, 0}, {10, 10}, {0, 20}, X11_STOP,
+		{10, 0}, {20, 10}, {10, 20}, X11_STOP, X11_STOP,
 	},
 	x11_icon_repeat[] =
 	{
 		{0, 12}, {0, 6}, {3, 3}, {13, 3}, {13, 0}, {20, 4.5},
-		{13, 9}, {13, 6}, {3, 6}, {3, 10}, x11_stop,
+		{13, 9}, {13, 6}, {3, 6}, {3, 10}, X11_STOP,
 		{0, 15.5}, {7, 11}, {7, 14}, {17, 14}, {17, 10}, {20, 8},
-		{20, 14}, {17, 17}, {7, 17}, {7, 20}, x11_stop, x11_stop,
+		{20, 14}, {17, 17}, {7, 17}, {7, 20}, X11_STOP, X11_STOP,
 	},
 	x11_icon_random[] =
 	{
-		{0, 6}, {0, 3}, {5, 3}, {6, 4.5}, {4, 7.5}, {3, 6}, x11_stop,
+		{0, 6}, {0, 3}, {5, 3}, {6, 4.5}, {4, 7.5}, {3, 6}, X11_STOP,
 		{9, 15.5}, {11, 12.5}, {12, 14}, {13, 14}, {13, 11}, {20, 15.5},
-		{13, 20}, {13, 17}, {10, 17}, x11_stop,
+		{13, 20}, {13, 17}, {10, 17}, X11_STOP,
 		{0, 17}, {0, 14}, {3, 14}, {10, 3}, {13, 3}, {13, 0}, {20, 4.5},
-		{13, 9}, {13, 6}, {12, 6}, {5, 17}, x11_stop, x11_stop,
+		{13, 9}, {13, 6}, {12, 6}, {5, 17}, X11_STOP, X11_STOP,
 	},
 	x11_icon_single[] =
 	{
 		{7, 6}, {7, 4}, {9, 2}, {12, 2}, {12, 15}, {14, 15}, {14, 18},
-		{7, 18}, {7, 15}, {9, 15}, {9, 6}, x11_stop, x11_stop,
+		{7, 18}, {7, 15}, {9, 15}, {9, 6}, X11_STOP, X11_STOP,
 	},
 	x11_icon_consume[] =
 	{
 		{0, 13}, {0, 7}, {4, 3}, {10, 3}, {14, 7}, {5, 10}, {14, 13},
-		{10, 17}, {4, 17}, x11_stop,
-		{16, 12}, {16, 8}, {20, 8}, {20, 12}, x11_stop, x11_stop,
+		{10, 17}, {4, 17}, X11_STOP,
+		{16, 12}, {16, 8}, {20, 8}, {20, 12}, X11_STOP, X11_STOP,
 	};
 
 static const XPointDouble *
@@ -6212,6 +6213,7 @@ on_x11_selection_request (XSelectionRequestEvent *ev)
 	Atom xa_utf8 = XInternAtom (g.dpy, "UTF8_STRING", False);
 	Atom targets[] = { xa_targets, XA_STRING, xa_compound_text, xa_utf8 };
 
+	XEvent response = {};
 	bool ok = false;
 	Atom property = ev->property ? ev->property : ev->target;
 	if (!g.x11_selection)
@@ -6246,7 +6248,6 @@ on_x11_selection_request (XSelectionRequestEvent *ev)
 	XFree (text.value);
 
 out:
-	XEvent response = {};
 	response.xselection.type = SelectionNotify;
 	// XXX: We should check it against the event causing XSetSelectionOwner().
 	response.xselection.time = ev->time;
