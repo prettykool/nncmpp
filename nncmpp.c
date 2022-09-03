@@ -1982,28 +1982,17 @@ app_layout_tabs (void)
 static void
 app_layout_header (void)
 {
+	if (g.client.state == MPD_CONNECTED)
 	{
-		struct layout l = {};
-		app_push_fill (&l, g.ui->padding (APP_ATTR (NORMAL), 0, 0.125));
-		app_flush_layout (&l);
-	}
+		struct layout lt = {};
+		app_push_fill (&lt, g.ui->padding (APP_ATTR (NORMAL), 0, 0.125));
+		app_flush_layout (&lt);
 
-	switch (g.client.state)
-	{
-	case MPD_CONNECTED:
 		app_layout_status ();
-		break;
-	case MPD_CONNECTING:
-		app_layout_text ("Connecting to MPD...", APP_ATTR (NORMAL));
-		break;
-	case MPD_DISCONNECTED:
-		app_layout_text ("Disconnected", APP_ATTR (NORMAL));
-	}
 
-	{
-		struct layout l = {};
-		app_push_fill (&l, g.ui->padding (APP_ATTR (NORMAL), 0, 0.125));
-		app_flush_layout (&l);
+		struct layout lb = {};
+		app_push_fill (&lb, g.ui->padding (APP_ATTR (NORMAL), 0, 0.125));
+		app_flush_layout (&lb);
 	}
 
 	app_layout_tabs ();
@@ -2273,6 +2262,10 @@ app_layout_statusbar (void)
 	}
 	else if (g.client.state == MPD_CONNECTED)
 		app_layout_mpd_status ();
+	else if (g.client.state == MPD_CONNECTING)
+		app_layout_text ("Connecting to MPD...", attrs[0]);
+	else if (g.client.state == MPD_DISCONNECTED)
+		app_layout_text ("Disconnected", attrs[0]);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -5010,6 +5003,7 @@ app_on_reconnect (void *user_data)
 		mpd_queue_reconnect ();
 	}
 	free (address);
+	app_invalidate ();
 }
 
 // --- TUI ---------------------------------------------------------------------

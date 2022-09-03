@@ -12,6 +12,8 @@ Unreleased
 
  * Made it possible to adjust the spectrum analyzer's FPS limit
 
+ * Moved "Disconnected" and "Connecting..." messages to the status bar
+
  * Fixed possibility of connection timeouts with PulseAudio integration
 
 
