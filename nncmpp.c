@@ -2105,7 +2105,7 @@ app_sublayout_list (struct widget *list)
 {
 	struct tab *tab = g.active_tab;
 	int to_show = MIN ((int) tab->item_count - tab->item_top,
-		list->height / g.ui_vunit);
+		ceil ((double) list->height / g.ui_vunit));
 
 	struct layout l = {};
 	for (int row = 0; row < to_show; row++)
@@ -2845,9 +2845,8 @@ app_process_left_mouse_click (struct widget *w, int x, int y, int modifiers)
 		else if (tab->item_mark < 0)
 			tab->item_mark = tab->item_selected;
 
-		// TODO: Probably will need to fix up item->top
-		//   for partially visible items in X11.
 		tab->item_selected = row_index + tab->item_top;
+		app_ensure_selection_visible ();
 		app_invalidate ();
 
 		if (modifiers & APP_KEYMOD_DOUBLE_CLICK)
@@ -2858,7 +2857,7 @@ app_process_left_mouse_click (struct widget *w, int x, int y, int modifiers)
 	{
 		struct tab *tab = g.active_tab;
 		int visible_items = app_visible_items ();
-		tab->item_top = (float) y / w->height
+		tab->item_top = (double) y / w->height
 			* (int) tab->item_count - visible_items / 2;
 		app_invalidate ();
 		break;
@@ -5818,17 +5817,22 @@ x11_make_scrollbar (chtype attrs)
 	return w;
 }
 
-// TODO: Handle partial items, otherwise this is the same as tui_render_list().
 static void
 x11_render_list (struct widget *self)
 {
-	x11_render_padding (self);
+	// We could do that for all widgets, but it would be kind-of pointless.
+	XRenderSetPictureClipRectangles (g.dpy, g.x11_pixmap_picture, 0, 0,
+		&(XRectangle) { self->x, self->y, self->width, self->height }, 1);
 
+	x11_render_padding (self);
 	LIST_FOR_EACH (struct widget, w, self->on_sublayout (self))
 	{
 		w->on_render (w);
 		free (w);
 	}
+
+	XRenderChangePicture (g.dpy, g.x11_pixmap_picture, CPClipMask,
+		&(XRenderPictureAttributes) { .clip_mask = None });
 }
 
 static struct widget *
