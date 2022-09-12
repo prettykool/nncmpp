@@ -1,5 +1,3 @@
-#include "config.h"
-
 NONE,               Do nothing
 
 QUIT,               Quit
@@ -28,11 +26,11 @@ MPD_CONSUME,        Toggle consume
 MPD_UPDATE_DB,      Update MPD database
 MPD_COMMAND,        Send raw command to MPD
 
-#ifdef WITH_PULSE
+.ifdef WITH_PULSE
 PULSE_VOLUME_UP,    Increase PulseAudio volume
 PULSE_VOLUME_DOWN,  Decrease PulseAudio volume
 PULSE_MUTE,         Toggle PulseAudio sink mute
-#endif
+.endif
 
 CHOOSE,             Choose item
 DELETE,             Delete item

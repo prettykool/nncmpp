@@ -10,6 +10,14 @@ endif ()
 # For custom modules
 set (CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/liberty/cmake)
 
+# Collect important build toggles for our simple preprocessor
+# (cpp(1) isn't part of POSIX, otherwise we could reuse config.h)
+set (options)
+macro (add_option variable help value)
+	option (${ARGV})
+	list (APPEND options "${variable}=$<BOOL:${${variable}}>")
+endmacro ()
+
 # Dependencies
 find_package (Ncursesw REQUIRED)
 find_package (PkgConfig REQUIRED)
@@ -19,7 +27,7 @@ pkg_check_modules (curl REQUIRED libcurl)
 include (AddThreads)
 
 find_package (Termo QUIET NO_MODULE)
-option (USE_SYSTEM_TERMO
+add_option (USE_SYSTEM_TERMO
 	"Don't compile our own termo library, use the system one" ${Termo_FOUND})
 if (USE_SYSTEM_TERMO)
 	if (NOT Termo_FOUND)
@@ -41,7 +49,7 @@ else ()
 endif ()
 
 pkg_check_modules (fftw fftw3 fftw3f)
-option (WITH_FFTW "Use FFTW to enable spectrum visualisation" ${fftw_FOUND})
+add_option (WITH_FFTW "Use FFTW to enable spectrum visualisation" ${fftw_FOUND})
 if (WITH_FFTW)
 	if (NOT fftw_FOUND)
 		message (FATAL_ERROR "FFTW not found")
@@ -50,7 +58,8 @@ if (WITH_FFTW)
 endif ()
 
 pkg_check_modules (libpulse libpulse)
-option (WITH_PULSE "Enable control of PulseAudio sink volume" ${libpulse_FOUND})
+add_option (WITH_PULSE
+	"Enable PulseAudio sink volume control" ${libpulse_FOUND})
 if (WITH_PULSE)
 	if (NOT libpulse_FOUND)
 		message (FATAL_ERROR "libpulse not found")
@@ -59,7 +68,7 @@ if (WITH_PULSE)
 endif ()
 
 pkg_check_modules (x11 x11 xrender xft fontconfig)
-option (WITH_X11 "Use FFTW to enable spectrum visualisation" ${x11_FOUND})
+add_option (WITH_X11 "Use FFTW to enable spectrum visualisation" ${x11_FOUND})
 if (WITH_X11)
 	if (NOT x11_FOUND)
 		message (FATAL_ERROR "Some X11 libraries were not found")
@@ -99,20 +108,13 @@ configure_file (${PROJECT_SOURCE_DIR}/config.h.in
 	${PROJECT_BINARY_DIR}/config.h)
 include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 
-# Assuming a Unix-compatible system with a standalone preprocessor
 set (actions_list ${PROJECT_SOURCE_DIR}/nncmpp.actions)
+set (actions_awk ${PROJECT_SOURCE_DIR}/nncmpp.actions.awk)
 set (actions ${PROJECT_BINARY_DIR}/nncmpp-actions.h)
 add_custom_command (OUTPUT ${actions}
-	COMMAND cpp -I${PROJECT_BINARY_DIR} -P ${actions_list}
-		| grep . | tr [[\n]] ^ | sed -ne [[h; s/,[^^]*/,/g]] -e [[s/$/COUNT/]]
-			-e [[s/[^^]*/\tACTION_&/g]] -e [[s/.*/enum action {\n&\n};\n/p]]
-			-e [[g; s/,[^^]*//g; y/_/-/]] -e [[s/[^^]\{1,\}/\t"&",/g]]
-			-e [[s/.*/static const char *g_action_names[] = {\n&};\n/p]]
-			-e [[g; s/[^^]*, *//g;]] -e [[s/[^^]\{1,\}/\t"&",/g]]
-			-e [[s/.*/static const char *g_action_descriptions[] = {\n&};/p]]
-		| tr ^ [[\n]] > ${actions}
-	COMMAND test -s ${actions}
-	DEPENDS ${actions_list} ${PROJECT_BINARY_DIR}/config.h VERBATIM)
+	COMMAND env LC_ALL=C ${options}
+		awk -f ${actions_awk} ${actions_list} > ${actions}
+	DEPENDS ${actions_awk} ${actions_list} VERBATIM)
 
 # Build the main executable and link it
 add_executable (${PROJECT_NAME} ${PROJECT_NAME}.c ${actions})

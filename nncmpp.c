@@ -4168,9 +4168,8 @@ help_tab_on_action (enum action action)
 
 	if (action == ACTION_DESCRIBE)
 	{
-		char *name = xstrdup (g_action_names[a]);
-		cstr_transform (name, tolower_ascii);
-		app_show_message (xstrdup ("Configuration name: "), name);
+		app_show_message (xstrdup ("Configuration name: "),
+			xstrdup (g_action_names[a]));
 		return true;
 	}
 	if (action != ACTION_CHOOSE || a == ACTION_CHOOSE /* avoid recursion */)
