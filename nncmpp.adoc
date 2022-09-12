@@ -81,6 +81,10 @@ The distribution contains example colour schemes in the _contrib_ directory.
 // TODO: it seems like liberty should contain an includable snippet about
 //   the format, which could form a part of nncmpp.conf(5).
 
+To adjust key bindings, put them within a *normal* or *editor* object.
+Run *nncmpp* with the *--debug* option to find out key combinations names.
+Press *?* in the help tab to learn the action identifiers to use.
+
 Spectrum visualiser
 -------------------
 When built against the FFTW library, *nncmpp* can make use of MPD's "fifo"
