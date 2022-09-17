@@ -185,8 +185,8 @@ line_editor_action (struct line_editor *self, enum line_editor_action action)
 		if (self->point + 1 > (int) self->len)
 			return false;
 		int i = self->point;
-		while (i < (int) self->len && self->line[i] != ' ') i++;
 		while (i < (int) self->len && self->line[i] == ' ') i++;
+		while (i < (int) self->len && self->line[i] != ' ') i++;
 		self->point = i;
 		return true;
 	}
