@@ -2774,6 +2774,13 @@ app_editor_process_action (enum action action)
 	case ACTION_EDITOR_END:
 		return line_editor_action (&g.editor, LINE_EDITOR_END);
 
+	case ACTION_EDITOR_UPCASE_WORD:
+		return line_editor_action (&g.editor, LINE_EDITOR_UPCASE_WORD);
+	case ACTION_EDITOR_DOWNCASE_WORD:
+		return line_editor_action (&g.editor, LINE_EDITOR_DOWNCASE_WORD);
+	case ACTION_EDITOR_CAPITALIZE_WORD:
+		return line_editor_action (&g.editor, LINE_EDITOR_CAPITALIZE_WORD);
+
 	case ACTION_EDITOR_B_DELETE:
 		return line_editor_action (&g.editor, LINE_EDITOR_B_DELETE);
 	case ACTION_EDITOR_F_DELETE:
@@ -3019,6 +3026,10 @@ g_editor_defaults[] =
 	{ "End",        ACTION_EDITOR_END         },
 	{ "C-a",        ACTION_EDITOR_HOME        },
 	{ "C-e",        ACTION_EDITOR_END         },
+
+	{ "M-u",        ACTION_EDITOR_UPCASE_WORD     },
+	{ "M-l",        ACTION_EDITOR_DOWNCASE_WORD   },
+	{ "M-c",        ACTION_EDITOR_CAPITALIZE_WORD },
 
 	{ "C-h",        ACTION_EDITOR_B_DELETE    },
 	{ "DEL",        ACTION_EDITOR_B_DELETE    },

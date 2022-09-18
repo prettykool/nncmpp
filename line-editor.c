@@ -1,7 +1,7 @@
 /*
  * line-editor.c: a line editor component for the TUI part of liberty
  *
- * Copyright (c) 2017 - 2018, Přemysl Eric Janouch <p@janouch.name>
+ * Copyright (c) 2017 - 2022, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -47,6 +47,10 @@ enum line_editor_action
 	LINE_EDITOR_F_WORD,                 ///< Go forward a word
 	LINE_EDITOR_HOME,                   ///< Go to start of line
 	LINE_EDITOR_END,                    ///< Go to end of line
+
+	LINE_EDITOR_UPCASE_WORD,            ///< Convert word to uppercase
+	LINE_EDITOR_DOWNCASE_WORD,          ///< Convert word to lowercase
+	LINE_EDITOR_CAPITALIZE_WORD,        ///< Capitalize word
 
 	LINE_EDITOR_B_DELETE,               ///< Delete last character
 	LINE_EDITOR_F_DELETE,               ///< Delete next character
@@ -196,6 +200,41 @@ line_editor_action (struct line_editor *self, enum line_editor_action action)
 	case LINE_EDITOR_END:
 		self->point = self->len;
 		return true;
+
+	case LINE_EDITOR_UPCASE_WORD:
+	{
+		int i = self->point;
+		for (; i < (int) self->len && self->line[i] == ' '; i++);
+		for (; i < (int) self->len && self->line[i] != ' '; i++)
+			self->line[i] = uc_toupper (self->line[i]);
+		self->point = i;
+		line_editor_changed (self);
+		return true;
+	}
+	case LINE_EDITOR_DOWNCASE_WORD:
+	{
+		int i = self->point;
+		for (; i < (int) self->len && self->line[i] == ' '; i++);
+		for (; i < (int) self->len && self->line[i] != ' '; i++)
+			self->line[i] = uc_tolower (self->line[i]);
+		self->point = i;
+		line_editor_changed (self);
+		return true;
+	}
+	case LINE_EDITOR_CAPITALIZE_WORD:
+	{
+		int i = self->point;
+		ucs4_t (*converter) (ucs4_t) = uc_totitle;
+		for (; i < (int) self->len && self->line[i] == ' '; i++);
+		for (; i < (int) self->len && self->line[i] != ' '; i++)
+		{
+			self->line[i] = converter (self->line[i]);
+			converter = uc_tolower;
+		}
+		self->point = i;
+		line_editor_changed (self);
+		return true;
+	}
 
 	case LINE_EDITOR_B_DELETE:
 	{

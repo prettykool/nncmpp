@@ -65,6 +65,10 @@ EDITOR_F_WORD,      Go forward a word
 EDITOR_HOME,        Go to start of line
 EDITOR_END,         Go to end of line
 
+EDITOR_UPCASE_WORD,     Convert word to uppercase
+EDITOR_DOWNCASE_WORD,   Convert word to lowercase
+EDITOR_CAPITALIZE_WORD, Capitalize word
+
 EDITOR_B_DELETE,    Delete last character
 EDITOR_F_DELETE,    Delete next character
 EDITOR_B_KILL_WORD, Delete last word
