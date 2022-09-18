@@ -75,10 +75,11 @@ enum
 #define HAVE_LIBERTY
 #include "line-editor.c"
 
-#include <math.h>
+#include <dirent.h>
 #include <locale.h>
-#include <termios.h>
+#include <math.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 
 // ncurses is notoriously retarded for input handling, we need something
 // different if only to receive mouse events reliably.
@@ -130,6 +131,20 @@ clock_msec (clockid_t clock)
 	return (int64_t) tp.tv_sec * 1000 + (int64_t) tp.tv_nsec / 1000000;
 }
 
+static void
+shell_quote (const char *str, struct str *output)
+{
+	// See SUSv3 Shell and Utilities, 2.2.3 Double-Quotes
+	str_append_c (output, '"');
+	for (const char *p = str; *p; p++)
+	{
+		if (strchr ("`$\"\\", *p))
+			str_append_c (output, '\\');
+		str_append_c (output, *p);
+	}
+	str_append_c (output, '"');
+}
+
 static bool
 xstrtoul_map (const struct str_map *map, const char *key, unsigned long *out)
 {
@@ -162,6 +177,18 @@ latin1_to_utf8 (const char *latin1)
 		}
 	}
 	return str_steal (&converted);
+}
+
+static void
+str_enforce_utf8 (struct str *self)
+{
+	if (!utf8_validate (self->str, self->len))
+	{
+		char *sanitized = latin1_to_utf8 (self->str);
+		str_reset (self);
+		str_append (self, sanitized);
+		free (sanitized);
+	}
 }
 
 static void
@@ -318,6 +345,8 @@ poller_curl_on_socket_action (CURL *easy, curl_socket_t s, int what,
 	struct poller_curl_fd *fd;
 	if (!(fd = socket_data))
 	{
+		set_cloexec (s);
+
 		fd = xmalloc (sizeof *fd);
 		LIST_PREPEND (self->fds, fd);
 
@@ -4089,68 +4118,456 @@ streams_tab_init (void)
 
 // --- Info tab ----------------------------------------------------------------
 
+struct info_tab_plugin
+{
+	LIST_HEADER (struct info_tab_plugin)
+
+	char *path;                         ///< Filesystem path to plugin
+	char *description;                  ///< What the plugin does
+};
+
+static struct info_tab_plugin *
+info_tab_plugin_load (const char *path)
+{
+	// Shell quoting is less annoying than process management.
+	struct str escaped = str_make ();
+	shell_quote (path, &escaped);
+	FILE *fp = popen (escaped.str, "r");
+	str_free (&escaped);
+	if (!fp)
+	{
+		print_error ("%s: %s", path, strerror (errno));
+		return NULL;
+	}
+
+	struct str description = str_make ();
+	char buf[BUFSIZ];
+	size_t len;
+	while ((len = fread (buf, 1, sizeof buf, fp)) == sizeof buf)
+		str_append_data (&description, buf, len);
+	str_append_data (&description, buf, len);
+	if (pclose (fp))
+	{
+		str_free (&description);
+		print_error ("%s: %s", path, strerror (errno));
+		return NULL;
+	}
+
+	char *newline = strpbrk (description.str, "\r\n");
+	if (newline)
+	{
+		description.len = newline - description.str;
+		*newline = '\0';
+	}
+	str_enforce_utf8 (&description);
+	if (!description.len)
+	{
+		str_free (&description);
+		print_error ("%s: %s", path, "missing description");
+		return NULL;
+	}
+
+	struct info_tab_plugin *plugin = xcalloc (1, sizeof *plugin);
+	plugin->path = xstrdup (path);
+	plugin->description = str_steal (&description);
+	return plugin;
+}
+
+static void
+info_tab_plugin_load_dir (struct str_map *basename_to_path, const char *dirname)
+{
+	DIR *dir = opendir (dirname);
+	if (!dir)
+	{
+		print_debug ("opendir: %s: %s", dirname, strerror (errno));
+		return;
+	}
+
+	struct dirent *entry = NULL;
+	while ((entry = readdir (dir)))
+	{
+		struct stat st = {};
+		char *path = xstrdup_printf ("%s/%s", dirname, entry->d_name);
+		if (stat (path, &st) || !S_ISREG (st.st_mode))
+		{
+			free (path);
+			continue;
+		}
+
+		// Empty files silently erase formerly found basenames.
+		if (!st.st_size)
+			cstr_set (&path, NULL);
+
+		str_map_set (basename_to_path, entry->d_name, path);
+	}
+	closedir (dir);
+}
+
+static int
+strv_sort_cb (const void *a, const void *b)
+{
+	return strcmp (*(const char **) a, *(const char **) b);
+}
+
+static struct info_tab_plugin *
+info_tab_plugin_load_all (void)
+{
+	struct str_map basename_to_path = str_map_make (free);
+	struct strv paths = strv_make ();
+	get_xdg_data_dirs (&paths);
+	strv_append (&paths, PROJECT_DATADIR);
+	for (size_t i = paths.len; i--; )
+	{
+		char *dirname =
+			xstrdup_printf ("%s/" PROGRAM_NAME "/info", paths.vector[i]);
+		info_tab_plugin_load_dir (&basename_to_path, dirname);
+		free (dirname);
+	}
+	strv_free (&paths);
+
+	struct strv sorted = strv_make ();
+	struct str_map_iter iter = str_map_iter_make (&basename_to_path);
+	while (str_map_iter_next (&iter))
+		strv_append (&sorted, iter.link->key);
+	qsort (sorted.vector, sorted.len, sizeof *sorted.vector, strv_sort_cb);
+
+	struct info_tab_plugin *result = NULL;
+	for (size_t i = sorted.len; i--; )
+	{
+		const char *path = str_map_find (&basename_to_path, sorted.vector[i]);
+		struct info_tab_plugin *plugin = info_tab_plugin_load (path);
+		if (plugin)
+			LIST_PREPEND (result, plugin);
+	}
+	str_map_free (&basename_to_path);
+	strv_free (&sorted);
+	return result;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+struct info_tab_item
+{
+	char *prefix;                       ///< Fixed-width prefix column or NULL
+	char *text;                         ///< Text or NULL
+	bool formatted;                     ///< Interpret inline formatting marks?
+	struct info_tab_plugin *plugin;     ///< Activatable plugin
+};
+
+static void
+info_tab_item_free (struct info_tab_item *self)
+{
+	cstr_set (&self->prefix, NULL);
+	cstr_set (&self->text, NULL);
+}
+
 static struct
 {
 	struct tab super;                   ///< Parent class
-	struct strv keys;                   ///< Data keys
-	struct strv values;                 ///< Data values
+	struct info_tab_item *items;        ///< Items array
+	size_t items_alloc;                 ///< How many items are allocated
+
+	struct info_tab_plugin *plugins;    ///< Plugins
+
+	int plugin_songid;                  ///< Song ID or -1
+	pid_t plugin_pid;                   ///< Running plugin's process ID or -1
+	int plugin_stdout;                  ///< pid != -1: read end of stdout
+	struct poller_fd plugin_event;      ///< pid != -1: stdout is readable
+	struct str plugin_output;           ///< pid != -1: buffer, otherwise result
 }
 g_info_tab;
+
+static chtype
+info_tab_format_decode_toggle (char c)
+{
+	switch (c)
+	{
+	case '\x01':
+		return A_BOLD;
+	case '\x02':
+		return A_ITALIC;
+	default:
+		return 0;
+	}
+}
+
+static void
+info_tab_format (struct layout *l, const char *text)
+{
+	chtype attrs = 0;
+	for (const char *p = text; *p; p++)
+	{
+		chtype toggled = info_tab_format_decode_toggle (*p);
+		if (!toggled)
+			continue;
+
+		if (p != text)
+		{
+			char *slice = xstrndup (text, p - text);
+			app_push (l, g.ui->label (attrs, slice));
+			free (slice);
+		}
+
+		attrs ^= toggled;
+		text = p + 1;
+	}
+	if (*text)
+		app_push (l, g.ui->label (attrs, text));
+}
 
 static struct layout
 info_tab_on_item_layout (size_t item_index)
 {
-	const char *key = g_info_tab.keys.vector[item_index];
-	const char *value = g_info_tab.values.vector[item_index];
+	struct info_tab_item *item = &g_info_tab.items[item_index];
 	struct layout l = {};
+	if (item->prefix)
+	{
+		char *prefix = xstrdup_printf ("%s:", item->prefix);
+		app_push (&l, g.ui->label (A_BOLD, prefix))
+			->width = 8 * g.ui_hunit;
+		app_push (&l, g.ui->padding (0, 0.5, 1));
+	}
 
-	char *prefix = xstrdup_printf ("%s:", key);
-	app_push (&l, g.ui->label (A_BOLD, prefix))
-		->width = 8 * g.ui_hunit;
-	app_push (&l, g.ui->padding (0, 0.5, 1));
-	app_push_fill (&l, g.ui->label (0, value));
+	if (item->plugin)
+		app_push (&l, g.ui->label (A_BOLD, item->plugin->description));
+	else if (!item->text || !*item->text)
+		app_push (&l, g.ui->padding (0, 1, 1));
+	else if (item->formatted)
+		info_tab_format (&l, item->text);
+	else
+		app_push (&l, g.ui->label (0, item->text));
+
+	if (l.tail)
+		l.tail->width = -1;
 	return l;
+}
+
+static struct info_tab_item *
+info_tab_prepare (void)
+{
+	if (g_info_tab.super.item_count == g_info_tab.items_alloc)
+		g_info_tab.items = xreallocarray (g_info_tab.items,
+			sizeof *g_info_tab.items, (g_info_tab.items_alloc <<= 1));
+
+	struct info_tab_item *item =
+		&g_info_tab.items[g_info_tab.super.item_count++];
+	memset (item, 0, sizeof *item);
+	return item;
 }
 
 static void
 info_tab_add (compact_map_t data, const char *field)
 {
-	const char *value = compact_map_find (data, field);
-	if (!value) value = "";
-
-	strv_append (&g_info_tab.keys, field);
-	strv_append (&g_info_tab.values, value);
-	g_info_tab.super.item_count++;
+	struct info_tab_item *item = info_tab_prepare ();
+	item->prefix = xstrdup (field);
+	item->text = xstrdup0 (compact_map_find (data, field));
 }
 
 static void
 info_tab_update (void)
 {
-	strv_reset (&g_info_tab.keys);
-	strv_reset (&g_info_tab.values);
-	g_info_tab.super.item_count = 0;
+	while (g_info_tab.super.item_count)
+		info_tab_item_free (&g_info_tab.items[--g_info_tab.super.item_count]);
 
-	compact_map_t map;
-	if ((map = item_list_get (&g.playlist, g.song)))
+	compact_map_t map = item_list_get (&g.playlist, g.song);
+	if (!map)
+		return;
+
+	info_tab_add (map, "Title");
+	info_tab_add (map, "Artist");
+	info_tab_add (map, "Album");
+	info_tab_add (map, "Track");
+	info_tab_add (map, "Genre");
+	// We actually receive it as "file", but the key is also used for display
+	info_tab_add (map, "File");
+
+	if (g_info_tab.plugins)
 	{
-		info_tab_add (map, "Title");
-		info_tab_add (map, "Artist");
-		info_tab_add (map, "Album");
-		info_tab_add (map, "Track");
-		info_tab_add (map, "Genre");
-		// Yes, it is "file", but this is also for display
-		info_tab_add (map, "File");
+		(void) info_tab_prepare ();
+		LIST_FOR_EACH (struct info_tab_plugin, plugin, g_info_tab.plugins)
+			info_tab_prepare ()->plugin = plugin;
+	}
+
+	if (g_info_tab.plugin_pid != -1)
+	{
+		(void) info_tab_prepare ();
+		info_tab_prepare ()->text = xstrdup ("Processing...");
+		return;
+	}
+
+	const char *songid = compact_map_find (map, "Id");
+	if (songid && atoi (songid) == g_info_tab.plugin_songid
+	 && g_info_tab.plugin_output.len)
+	{
+		struct strv lines = strv_make ();
+		cstr_split (g_info_tab.plugin_output.str, "\r\n", false, &lines);
+
+		(void) info_tab_prepare ();
+		for (size_t i = 0; i < lines.len; i++)
+		{
+			struct info_tab_item *item = info_tab_prepare ();
+			item->formatted = true;
+			item->text = lines.vector[i];
+		}
+		free (lines.vector);
+	}
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+info_tab_plugin_abort (void)
+{
+	if (g_info_tab.plugin_pid == -1)
+		return;
+
+	// XXX: our methods of killing are very crude, we hope to improve;
+	//   at least install a SIGCHLD handler to collect zombies
+	(void) kill (-g_info_tab.plugin_pid, SIGTERM);
+
+	int status = 0;
+	while (waitpid (g_info_tab.plugin_pid, &status, WNOHANG) == -1
+		&& errno == EINTR)
+		;
+	if (WIFEXITED (status) && WEXITSTATUS (status) != EXIT_SUCCESS)
+		print_error ("plugin reported failure");
+
+	g_info_tab.plugin_pid = -1;
+	poller_fd_reset (&g_info_tab.plugin_event);
+	xclose (g_info_tab.plugin_stdout);
+	g_info_tab.plugin_stdout = -1;
+}
+
+static void
+info_tab_on_plugin_stdout (const struct pollfd *fd, void *user_data)
+{
+	(void) user_data;
+
+	struct str *buf = &g_info_tab.plugin_output;
+	switch (socket_io_try_read (fd->fd, buf))
+	{
+	case SOCKET_IO_OK:
+		str_enforce_utf8 (buf);
+		return;
+	case SOCKET_IO_ERROR:
+		print_error ("error reading from plugin: %s", strerror (errno));
+		// Fall-through
+	case SOCKET_IO_EOF:
+		info_tab_plugin_abort ();
+		info_tab_update ();
+		app_invalidate ();
+	}
+}
+
+static void
+info_tab_plugin_run (struct info_tab_plugin *plugin, compact_map_t map)
+{
+	info_tab_plugin_abort ();
+	if (!map)
+		return;
+
+	const char *songid = compact_map_find (map, "Id");
+	const char *title  = compact_map_find (map, "Title");
+	const char *artist = compact_map_find (map, "Artist");
+	const char *album  = compact_map_find (map, "Album");
+	if (!songid || !title || !artist)
+	{
+		print_error ("unknown song title or artist");
+		return;
+	}
+
+	int stdout_pipe[2];
+	if (pipe (stdout_pipe))
+	{
+		print_error ("%s: %s", "pipe", strerror (errno));
+		return;
+	}
+
+	enum { READ, WRITE };
+	set_cloexec (stdout_pipe[READ]);
+	set_cloexec (stdout_pipe[WRITE]);
+
+	const char *argv[] =
+		{ xbasename (plugin->path), title, artist, album, NULL };
+
+	pid_t child = fork ();
+	switch (child)
+	{
+	case -1:
+		print_error ("%s: %s", "fork", strerror (errno));
+		xclose (stdout_pipe[READ]);
+		xclose (stdout_pipe[WRITE]);
+		return;
+	case 0:
+		if (setpgid (0, 0) == -1 || !freopen ("/dev/null", "r", stdin)
+		 || dup2 (stdout_pipe[WRITE], STDOUT_FILENO) == -1
+		 || dup2 (stdout_pipe[WRITE], STDERR_FILENO) == -1)
+			_exit (EXIT_FAILURE);
+
+		signal (SIGPIPE, SIG_DFL);
+
+		(void) execv (plugin->path, (char **) argv);
+		fprintf (stderr, "%s\n", strerror (errno));
+		_exit (EXIT_FAILURE);
+	default:
+		// Resolve the race, even though it isn't critical for us
+		(void) setpgid (child, child);
+
+		g_info_tab.plugin_songid = atoi (songid);
+		g_info_tab.plugin_pid = child;
+		set_blocking ((g_info_tab.plugin_stdout = stdout_pipe[READ]), false);
+		xclose (stdout_pipe[WRITE]);
+
+		struct poller_fd *event = &g_info_tab.plugin_event;
+		*event = poller_fd_make (&g.poller, g_info_tab.plugin_stdout);
+		event->dispatcher = info_tab_on_plugin_stdout;
+		str_reset (&g_info_tab.plugin_output);
+		poller_fd_set (&g_info_tab.plugin_event, POLLIN);
+	}
+}
+
+static bool
+info_tab_on_action (enum action action)
+{
+	struct tab *tab = g.active_tab;
+	if (tab->item_selected < 0
+	 || tab->item_selected >= (int) tab->item_count)
+		return false;
+
+	struct info_tab_item *item = &g_info_tab.items[tab->item_selected];
+	if (!item->plugin)
+		return false;
+
+	switch (action)
+	{
+	case ACTION_DESCRIBE:
+		app_show_message (xstrdup ("Path: "), xstrdup (item->plugin->path));
+		return true;
+	case ACTION_CHOOSE:
+		info_tab_plugin_run (item->plugin, item_list_get (&g.playlist, g.song));
+		info_tab_update ();
+		app_invalidate ();
+		return true;
+	default:
+		return false;
 	}
 }
 
 static struct tab *
 info_tab_init (void)
 {
-	g_info_tab.keys = strv_make ();
-	g_info_tab.values = strv_make ();
+	g_info_tab.items =
+		xcalloc ((g_info_tab.items_alloc = 16), sizeof *g_info_tab.items);
+
+	g_info_tab.plugins = info_tab_plugin_load_all ();
+	g_info_tab.plugin_songid = -1;
+	g_info_tab.plugin_pid = -1;
+	g_info_tab.plugin_stdout = -1;
+	g_info_tab.plugin_output = str_make ();
 
 	struct tab *super = &g_info_tab.super;
 	tab_init (super, "Info");
+	super->on_action = info_tab_on_action;
 	super->on_item_layout = info_tab_on_item_layout;
 	return super;
 }
@@ -5377,7 +5794,7 @@ tui_on_tty_readable (const struct pollfd *fd, void *user_data)
 	poller_timer_reset (&g.tk_timer);
 	termo_advisereadable (g.tk);
 
-	termo_key_t event;
+	termo_key_t event = {};
 	int64_t event_ts = clock_msec (CLOCK_BEST);
 	termo_result_t res;
 	while ((res = termo_getkey (g.tk, &event)) == TERMO_RES_KEY)
@@ -6675,6 +7092,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	str_append_vprintf (&message, fmt, ap);
 
 	// Show it prettified to the user, then maybe log it elsewhere as well.
+	// TODO: Review locale encoding vs UTF-8 in the entire program.
 	message.str[0] = toupper_ascii (message.str[0]);
 	app_show_message (xstrndup (message.str, quote_len),
 		xstrdup (message.str + quote_len));

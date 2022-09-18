@@ -104,6 +104,7 @@ foreach (extra m)
 endforeach ()
 
 # Generate a configuration file
+include (GNUInstallDirs)
 configure_file (${PROJECT_SOURCE_DIR}/config.h.in
 	${PROJECT_BINARY_DIR}/config.h)
 include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
@@ -123,10 +124,10 @@ target_link_libraries (${PROJECT_NAME} ${Unistring_LIBRARIES}
 add_threads (${PROJECT_NAME})
 
 # Installation
-include (GNUInstallDirs)
 install (TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install (FILES LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 install (DIRECTORY contrib DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
+install (DIRECTORY info DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
 
 # Generate documentation from text markup
 find_program (ASCIIDOCTOR_EXECUTABLE asciidoctor)

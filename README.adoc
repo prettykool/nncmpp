@@ -40,7 +40,7 @@ Building
 Build dependencies: CMake, pkg-config, asciidoctor or asciidoc,
                     liberty (included), termo (included) +
 Runtime dependencies: ncursesw, libunistring, cURL +
-Optional runtime dependencies: fftw3, libpulse, x11, xft
+Optional runtime dependencies: fftw3, libpulse, x11, xft, Perl + cURL (lyrics)
 
  $ git clone --recursive https://git.janouch.name/p/nncmpp.git
  $ mkdir nncmpp/build

@@ -4,6 +4,9 @@
 #define PROGRAM_NAME "${PROJECT_NAME}"
 #define PROGRAM_VERSION "${PROJECT_VERSION}"
 
+// We use the XDG Base Directory Specification, but may be installed anywhere.
+#define PROJECT_DATADIR "${CMAKE_INSTALL_FULL_DATADIR}"
+
 #cmakedefine HAVE_RESIZETERM
 #cmakedefine WITH_FFTW
 #cmakedefine WITH_PULSE

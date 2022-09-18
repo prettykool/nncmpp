@@ -1,3 +1,11 @@
+Unreleased
+
+ * Added ability to look up song lyrics,
+   using a new scriptable extension interface for the Info tab
+
+ * Added Readline-like M-u, M-l, M-c editor bindings
+
+
 2.0.0 (2022-09-03)
 
  * Added an optional X11 user interface
