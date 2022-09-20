@@ -3,6 +3,8 @@ Unreleased
  * Added ability to look up song lyrics,
    using a new scriptable extension interface for the Info tab
 
+ * Made the X11 interface support italic fonts
+
  * Added Readline-like M-u, M-l, M-c editor bindings
 
 

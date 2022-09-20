@@ -1397,6 +1397,7 @@ static struct app_context
 	XftDraw *xft_draw;                  ///< Xft rendering context
 	XftFont *xft_regular;               ///< Regular font
 	XftFont *xft_bold;                  ///< Bold font
+	XftFont *xft_italic;                ///< Italic font
 	char *x11_selection;                ///< CLIPBOARD selection
 
 	XRenderColor x_fg[ATTRIBUTE_COUNT]; ///< Foreground per attribute
@@ -5865,7 +5866,11 @@ static XErrorHandler x11_default_error_handler;
 static XftFont *
 x11_font (struct widget *self)
 {
-	return (self->attrs & A_BOLD) ? g.xft_bold : g.xft_regular;
+	if (self->attrs & A_BOLD)
+		return g.xft_bold;
+	if (self->attrs & A_ITALIC)
+		return g.xft_italic;
+	return g.xft_regular;
 }
 
 static XRenderColor *
@@ -6346,6 +6351,7 @@ x11_destroy (void)
 	XftDrawDestroy (g.xft_draw);
 	XftFontClose (g.dpy, g.xft_regular);
 	XftFontClose (g.dpy, g.xft_bold);
+	XftFontClose (g.dpy, g.xft_italic);
 	cstr_set (&g.x11_selection, NULL);
 
 	poller_fd_reset (&g.x11_event);
@@ -6847,8 +6853,11 @@ x11_init_fonts (void)
 
 	FcPattern *query_regular = FcNameParse ((const FcChar8 *) name);
 	FcPattern *query_bold = FcPatternDuplicate (query_regular);
-	FcPatternAdd (query_bold, FC_STYLE,
-		(FcValue) { .type = FcTypeString, .u.s = (FcChar8 *) "Bold" }, FcFalse);
+	FcPatternAdd (query_bold, FC_STYLE, (FcValue) {
+		.type = FcTypeString, .u.s = (FcChar8 *) "Bold" }, FcFalse);
+	FcPattern *query_italic = FcPatternDuplicate (query_regular);
+	FcPatternAdd (query_italic, FC_STYLE, (FcValue) {
+		.type = FcTypeString, .u.s = (FcChar8 *) "Italic" }, FcFalse);
 
 	FcPattern *regular = XftFontMatch (g.dpy, screen, query_regular, &result);
 	FcPatternDestroy (query_regular);
@@ -6866,6 +6875,13 @@ x11_init_fonts (void)
 		FcPatternDestroy (bold);
 	if (!g.xft_bold)
 		g.xft_bold = XftFontCopy (g.dpy, g.xft_regular);
+
+	FcPattern *italic = XftFontMatch (g.dpy, screen, query_italic, &result);
+	FcPatternDestroy (query_italic);
+	if (italic && !(g.xft_italic = XftFontOpenPattern (g.dpy, italic)))
+		FcPatternDestroy (italic);
+	if (!g.xft_italic)
+		g.xft_italic = XftFontCopy (g.dpy, g.xft_regular);
 }
 
 static void
