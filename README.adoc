@@ -18,6 +18,7 @@ Features
 Most stuff is there.  I've been using the program exclusively for many years.
 Among other things, it can display and change PulseAudio volume directly
 to cover the use case of remote control, it has a fast spectrum visualiser,
+it can be extended with plugins to fetch lyrics or other song-related info,
 and both its appearance and key bindings can be customized.
 
 Note that currently only the filesystem browsing mode is implemented,

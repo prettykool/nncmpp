@@ -128,12 +128,33 @@ For this to work, *nncmpp* needs to access the right PulseAudio daemon--in case
 your setup is unusual, consult the list of environment variables in
 *pulseaudio*(1).  MPD-compatibles are currently unsupported.
 
+Info plugins
+------------
+You can invoke various plugins from the Info tab, for example to look up
+song lyrics.
+
+Plugins can be arbitrary scripts or binaries.  When run without command line
+arguments, a plugin outputs a user interface description of what it does.
+When invoked by a user, it receives the following self-explanatory arguments:
+_TITLE_ _ARTIST_ [_ALBUM_], and anything it writes to its standard output
+or standard error stream is presented back to the user.  Here, bold and italic
+formatting can be toggled with ASCII control characters 1 (SOH) and 2 (STX),
+respectively.  Otherwise, all input and output makes use of the UTF-8 encoding.
+
 Files
 -----
 *nncmpp* follows the XDG Base Directory Specification.
 
 _~/.config/nncmpp/nncmpp.conf_::
 	The configuration file.
+
+_~/.local/share/nncmpp/info/_::
+_/usr/local/share/nncmpp/info/_::
+_/usr/share/nncmpp/info/_::
+	Info plugins are loaded from these directories, in order,
+	then listed lexicographically.
+	Only the first occurence of a particular filename is used,
+	and empty files act as silent disablers.
 
 Reporting bugs
 --------------
