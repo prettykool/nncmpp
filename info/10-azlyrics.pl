@@ -20,8 +20,8 @@ my ($title, $artist, $album) = map {decode_utf8($_)} @ARGV;
 
 # TODO: An upgrade would be transliteration with, e.g., Text::Unidecode.
 use Unicode::Normalize;
-$artist = lc(NFD($artist) =~ s/^the\s+//ir =~ s/[^A-Za-z0-9]//gr);
-$title  = lc(NFD($title)  =~ s/\(.*?\)//gr =~ s/[^A-Za-z0-9]//gr);
+$artist = lc(NFD($artist)) =~ s/^the\s+//ir =~ s/[^a-z0-9]//gr;
+$title  = lc(NFD($title))  =~ s/\(.*?\)//gr =~ s/[^a-z0-9]//gr;
 
 # TODO: Consider caching the results in a location like
 # $XDG_CACHE_HOME/nncmpp/info/azlyrics/$artist-$title
