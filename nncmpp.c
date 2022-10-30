@@ -6248,7 +6248,8 @@ static void
 x11_render_list (struct widget *self)
 {
 	// We could do that for all widgets, but it would be kind-of pointless.
-	XRenderSetPictureClipRectangles (g.dpy, g.x11_pixmap_picture, 0, 0,
+	// We need to go through Xft, or XftTextRenderUtf8() might skip glyphs.
+	XftDrawSetClipRectangles (g.xft_draw, 0, 0,
 		&(XRectangle) { self->x, self->y, self->width, self->height }, 1);
 
 	x11_render_padding (self);
@@ -6258,8 +6259,7 @@ x11_render_list (struct widget *self)
 		free (w);
 	}
 
-	XRenderChangePicture (g.dpy, g.x11_pixmap_picture, CPClipMask,
-		&(XRenderPictureAttributes) { .clip_mask = None });
+	XftDrawSetClip (g.xft_draw, None);
 }
 
 static struct widget *
