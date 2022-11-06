@@ -1891,6 +1891,7 @@ app_time_string (int seconds)
 	return str_steal (&s);
 }
 
+// Player states (and their icons)
 static void
 app_layout_status (void)
 {
@@ -1902,14 +1903,14 @@ app_layout_status (void)
 	struct layout l = {};
 
 	app_push (&l, g.ui->padding (attrs[0], 0.25, 1));
-	app_push (&l, g.ui->button (attrs[!stopped], "<<", ACTION_MPD_PREVIOUS));
+	app_push (&l, g.ui->button (attrs[!stopped], "⏮", ACTION_MPD_PREVIOUS));
 	app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
-	const char *toggle = g.state == PLAYER_PLAYING ? "||" : "|>";
+	const char *toggle = g.state == PLAYER_PLAYING ? "⏸" : "⏯";
 	app_push (&l, g.ui->button (attrs[1], toggle, ACTION_MPD_TOGGLE));
 	app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
-	app_push (&l, g.ui->button (attrs[!stopped], "[]", ACTION_MPD_STOP));
+	app_push (&l, g.ui->button (attrs[!stopped], "⏹", ACTION_MPD_STOP));
 	app_push (&l, g.ui->padding (attrs[0], 0.5, 1));
-	app_push (&l, g.ui->button (attrs[!stopped], ">>", ACTION_MPD_NEXT));
+	app_push (&l, g.ui->button (attrs[!stopped], "⏭", ACTION_MPD_NEXT));
 	app_push (&l, g.ui->padding (attrs[0], 1, 1));
 
 	if (stopped)
@@ -1940,18 +1941,18 @@ app_layout_status (void)
 		if (pulse_volume_status (&g.pulse, &volume))
 		{
 			if (g.volume >= 0 && g.volume != 100)
-				str_append_printf (&volume, " (%d%%)", g.volume);
+				str_append_printf (&volume, "(🔊%d%%)", g.volume);
 		}
 		else
 		{
 			if (g.volume >= 0)
-				str_append_printf (&volume, "(%d%%)", g.volume);
+				str_append_printf (&volume, "(🔊%d%%)", g.volume);
 		}
 	}
 	else
 #endif  // WITH_PULSE
 	if (g.volume >= 0)
-		str_append_printf (&volume, "%3d%%", g.volume);
+		str_append_printf (&volume, "🔊%3d%%", g.volume);
 
 	if (!stopped && g.song_elapsed >= 0 && g.song_duration >= 1)
 		app_push (&l, g.ui->gauge (attrs[0]))
@@ -3224,12 +3225,20 @@ current_tab_on_item_layout (size_t item_index)
 	compact_map_t map = item_list_get (&g.playlist, item_index);
 	const char *artist = compact_map_find (map, "artist");
 	const char *title  = compact_map_find (map, "title");
-
+	const char *album  = compact_map_find (map, "album");
+	
 	chtype attrs = (int) item_index == g.song ? A_BOLD : 0;
 	struct layout l = {};
-	if (artist && title)
+
+	if (artist && title && album)
 	{
-		char *joined = xstrdup_printf ("%s - %s", artist, title);
+	        char *joined = xstrdup_printf ("%s: %s: %s", artist, album, title);
+		app_push_fill (&l, g.ui->label (attrs, joined));
+		free (joined);
+	}
+	else if (artist && title)
+	{
+		char *joined = xstrdup_printf ("%s: %s", artist, title);
 		app_push_fill (&l, g.ui->label (attrs, joined));
 		free (joined);
 	}
@@ -5574,9 +5583,12 @@ tui_make_spectrum (chtype attrs, int width)
 	return w;
 }
 
+// Fuck scrollbars all my homies hate scrollbars
+
 static void
-tui_render_scrollbar (struct widget *self)
+tui_render_scrollbar (/*struct widget *self*/)
 {
+  /*
 	// This assumes that we can write to the one-before-last column,
 	// i.e. that it's not covered by any double-wide character (and that
 	// ncurses comes to the right results when counting characters).
@@ -5624,6 +5636,7 @@ tui_render_scrollbar (struct widget *self)
 		row_buffer_flush (&buf);
 		row_buffer_free (&buf);
 	}
+  */
 }
 
 static struct widget *
@@ -5632,7 +5645,7 @@ tui_make_scrollbar (chtype attrs)
 	struct widget *w = xcalloc (1, sizeof *w + 1);
 	w->on_render = tui_render_scrollbar;
 	w->attrs = attrs;
-	w->width = 1;
+	// w->width = 1;
 	return w;
 }
 

@@ -1,3 +1,35 @@
+pk's nncmpp fork
+================
+This is a varient of the nncmpp editor built to my
+liking. You'll probably hate it, but I like it. 
+
+Here's my settings, if you're curious:
+
+ colors = {
+ 	normal = ""
+ 	highlight = "bold"
+ 	elapsed = "reverse"
+ 	remains = ""
+ 
+ 	tab_bar = "reverse"
+ 	tab_active = "reverse bold"
+ 	defocused   = ""
+ 
+ 	selection = "reverse"
+ 	multiselect = "reverse"
+ }
+
+
+ normal = {
+        "Right" = "mpd-volume-up"
+        "Left" = "mpd-volume-down"
+ }
+
+
+
+ This is not for you.
+
+
 nncmpp
 ======
 
